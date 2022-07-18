@@ -11,8 +11,16 @@
     <name>Jahia GraphQL Extension Websites</name>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>bundle</packaging>
-    <description>GraphQL extension to manipulation websites</description>
-    
+    <description>GraphQL extension to manipulate websites</description>
+
+    <scm>
+        <connection>scm:git:git@github.com:Jahia/graphql-extension-websites.git</connection>
+        <developerConnection>scm:git:git@github.com:Jahia/graphql-extension-websites.git</developerConnection>
+        <url>scm:git:git@github.com:Jahia/graphql-extension-websites.git</url>
+        <tag>HEAD</tag>
+    </scm>
+
+
     <properties>
         <jahia-depends>default,graphql-dxm-provider</jahia-depends>
         <import-package>
