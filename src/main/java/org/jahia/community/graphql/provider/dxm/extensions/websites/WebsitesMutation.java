@@ -4,26 +4,19 @@ import graphql.annotations.annotationTypes.GraphQLDescription;
 import graphql.annotations.annotationTypes.GraphQLField;
 import graphql.annotations.annotationTypes.GraphQLName;
 import graphql.annotations.annotationTypes.GraphQLTypeExtension;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import javax.jcr.RepositoryException;
-import javax.xml.transform.TransformerException;
 import org.apache.commons.collections.ExtendedProperties;
+import org.apache.commons.io.FileUtils;
+import org.jahia.api.settings.SettingsBean;
+import org.jahia.api.usermanager.JahiaUserManagerService;
+import org.jahia.bin.listeners.JahiaContextLoaderListener;
 import org.jahia.commons.Version;
 import org.jahia.exceptions.JahiaException;
+import org.jahia.modules.graphql.provider.dxm.DataFetchingException;
 import org.jahia.modules.graphql.provider.dxm.admin.GqlJahiaAdminMutation;
+import org.jahia.modules.graphql.provider.dxm.security.GraphQLAsync;
+import org.jahia.osgi.BundleUtils;
 import org.jahia.registries.ServicesRegistry;
+import org.jahia.services.SpringContextSingleton;
 import org.jahia.services.content.JCRObservationManager;
 import org.jahia.services.content.JCRSessionFactory;
 import org.jahia.services.content.JCRSessionWrapper;
@@ -36,14 +29,32 @@ import org.jahia.services.search.spell.CompositeSpellChecker;
 import org.jahia.services.sites.JahiaSite;
 import org.jahia.services.sites.JahiaSitesService;
 import org.jahia.services.sites.SiteCreationInfo;
-import org.jahia.settings.SettingsBean;
+import org.jahia.services.usermanager.JahiaUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.FileSystemResource;
 import org.xml.sax.SAXException;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
+import software.amazon.awssdk.transfer.s3.S3TransferManager;
+import software.amazon.awssdk.transfer.s3.SizeConstant;
+import software.amazon.awssdk.transfer.s3.progress.LoggingTransferListener;
+
+import javax.jcr.RepositoryException;
+import javax.xml.transform.TransformerException;
+import java.io.*;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
 
 @GraphQLTypeExtension(GqlJahiaAdminMutation.class)
 public class WebsitesMutation {
+    private static Logger logger = LoggerFactory.getLogger(WebsitesMutation.class);
 
     private static final String JAHIA_RELEASE = "JahiaRelease";
     private static final Logger LOGGER = LoggerFactory.getLogger(WebsitesMutation.class);
@@ -108,6 +119,7 @@ public class WebsitesMutation {
 
     @GraphQLField
     @GraphQLDescription("Export a website")
+    @GraphQLAsync
     public static Boolean exportWebsite(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("exportPath") @GraphQLDescription("Export path") String exportPath,
@@ -129,7 +141,7 @@ public class WebsitesMutation {
             params.put(ImportExportService.INCLUDE_LIVE_EXPORT, !onlyStaging);
             params.put(ImportExportService.INCLUDE_USERS, true);
             params.put(ImportExportService.INCLUDE_ROLES, true);
-            final String cleanupXsl = SettingsBean.getInstance().getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
+            final String cleanupXsl = BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
             params.put(ImportExportService.XSL_PATH, cleanupXsl);
 
             final List<JCRSiteNode> siteList = new ArrayList<>();
@@ -147,11 +159,11 @@ public class WebsitesMutation {
     @GraphQLField
     @GraphQLDescription("Import a website")
     public static Boolean importWebsite(@GraphQLName("importPath") @GraphQLDescription("Import path") String importPath,
-            @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) throws IOException {
+                                        @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) throws IOException {
         LOGGER.info("Processing Import");
         Boolean successful = Boolean.TRUE;
-        final Path absoluteImportPath = Paths.get(SettingsBean.getInstance().getJahiaImportsDiskPath(), importPath);
-        try ( InputStream input = new FileInputStream(Paths.get(absoluteImportPath.toString(), "export.properties").toString())) {
+        final Path absoluteImportPath = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath(), importPath);
+        try (InputStream input = new FileInputStream(Paths.get(absoluteImportPath.toString(), "export.properties").toString())) {
             final Properties exportProperties = new Properties();
             exportProperties.load(input);
             final List<ImportInfo> importsInfos = new ArrayList<>();
@@ -268,7 +280,7 @@ public class WebsitesMutation {
 
     private static boolean importSite(JahiaSitesService jahiaSitesService, ImportInfo infos, String absoluteImportPath) {
         Boolean successful = Boolean.TRUE;
-        try ( InputStream inputSite = new FileInputStream(Paths.get(absoluteImportPath, infos.getSiteKey(), "site.properties").toString())) {
+        try (InputStream inputSite = new FileInputStream(Paths.get(absoluteImportPath, infos.getSiteKey(), "site.properties").toString())) {
             final ExtendedProperties siteProperties = new ExtendedProperties();
             siteProperties.load(inputSite);
             final File file = ImportUpdateService.getInstance().updateImport(
@@ -309,5 +321,86 @@ public class WebsitesMutation {
             successful = Boolean.FALSE;
         }
         return successful;
+    }
+
+    public enum ExportAllSitesResults {
+        SUCCESS,
+        FAILURE,
+        AWS_S3_BUCKET_NOT_CONFIGURED
+    }
+
+    @GraphQLField
+    @GraphQLDescription("Export All Sites towards the configured S3 bucket")
+    public static ExportAllSitesResults exportAllSites() {
+        GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
+        SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
+        final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath() + File.separator + "exports" + File.separator +
+                "export-" + DateTimeFormatter.ofPattern("yyyyMMddHHmm").format(LocalDateTime.now(ZoneOffset.UTC)) + ".zip");
+        try {
+            exportAllSites(exportFile);
+
+            if (websitesConfig.isConfigured()) {
+                uploadExport(exportFile, websitesConfig);
+            } else {
+                logger.error("AWS S3 bucket is not configured");
+                return ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED;
+            }
+        } catch (Exception e) {
+            throw new DataFetchingException(e);
+        } finally {
+            FileUtils.deleteQuietly(exportFile.toFile());
+        }
+        return ExportAllSitesResults.SUCCESS;
+    }
+
+    private static void exportAllSites(Path exportFile) throws Exception {
+        logger.info("<<< Export all sites job");
+        Map<String, Object> params = new HashMap<>();
+        params.put(ImportExportService.VIEW_CONTENT, true);
+        params.put(ImportExportService.VIEW_VERSION, false);
+        params.put(ImportExportService.VIEW_ACL, true);
+        params.put(ImportExportService.VIEW_METADATA, true);
+        params.put(ImportExportService.VIEW_JAHIALINKS, true);
+        params.put(ImportExportService.VIEW_WORKFLOW, true);
+        params.put(ImportExportService.INCLUDE_ALL_FILES, true);
+        params.put(ImportExportService.INCLUDE_TEMPLATES, true);
+        params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
+        params.put(ImportExportService.INCLUDE_DEFINITIONS, true);
+        params.put(ImportExportService.INCLUDE_LIVE_EXPORT, true);
+        params.put(ImportExportService.INCLUDE_USERS, true);
+        params.put(ImportExportService.INCLUDE_ROLES, true);
+        params.put(ImportExportService.XSL_PATH, JahiaContextLoaderListener.getServletContext().getRealPath("/WEB-INF/etc/repository/export/cleanup.xsl"));
+
+        JCRSessionFactory jcrSessionFactory = BundleUtils.getOsgiService(JCRSessionFactory.class, null);
+        JahiaUser currentUser = jcrSessionFactory.getCurrentUser();
+        try (FileOutputStream fos = new FileOutputStream(exportFile.toFile())) {
+            jcrSessionFactory.setCurrentUser(BundleUtils.getOsgiService(JahiaUserManagerService.class, null).lookupRootUser().getJahiaUser());
+            ((ImportExportBaseService) SpringContextSingleton.getBean("ImportExportService")).exportSites(new BufferedOutputStream(fos), params, JahiaSitesService.getInstance().getSitesNodeList());
+        } finally {
+            jcrSessionFactory.setCurrentUser(currentUser);
+        }
+        logger.info(">>> END Export all sites job");
+    }
+
+    private static void uploadExport(Path exportFile, GraphQLWebsitesConfig websitesConfig) {
+        final String awsS3Region = websitesConfig.getAwsS3Region();
+        final String awsS3AccessKey = websitesConfig.getAwsS3AccessKey();
+        final String awsS3BucketName = websitesConfig.getAwsS3BucketName();
+        final String awsS3SecretAccessKey = websitesConfig.getAwsS3SecretAccessKey();
+        logger.info("<<< Upload exportFile: {}", exportFile);
+        try (S3TransferManager s3TransferManager = S3TransferManager.builder()
+                .s3Client(S3AsyncClient.crtBuilder()
+                        .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(awsS3AccessKey, awsS3SecretAccessKey)))
+                        .region(Region.of(awsS3Region))
+                        .targetThroughputInGbps(20.0)
+                        .minimumPartSizeInBytes(8 * SizeConstant.MB)
+                        .build())
+                .build()) {
+            logger.info("ETag: {}", s3TransferManager.uploadFile(builder -> builder.putObjectRequest(b -> b.bucket(awsS3BucketName).key(exportFile.getFileName().toString()))
+                    .addTransferListener(LoggingTransferListener.create())
+                    .source(exportFile)
+                    .build()).completionFuture().join().response().eTag());
+        }
+        logger.info(">>> END upload exportFile: {}", exportFile);
     }
 }
