@@ -9,7 +9,7 @@
     <groupId>org.jahia.community</groupId>
     <artifactId>graphql-extension-websites</artifactId>
     <name>Jahia GraphQL Extension Websites</name>
-    <version>1.0.1-SNAPSHOT</version>
+    <version>1.0.1</version>
     <packaging>bundle</packaging>
     <description>GraphQL extension to manipulate websites</description>
 
@@ -17,7 +17,7 @@
         <connection>scm:git:git@github.com:Jahia/graphql-extension-websites.git</connection>
         <developerConnection>scm:git:git@github.com:Jahia/graphql-extension-websites.git</developerConnection>
         <url>scm:git:git@github.com:Jahia/graphql-extension-websites.git</url>
-        <tag>HEAD</tag>
+        <tag>1_0_1</tag>
     </scm>
 
 
