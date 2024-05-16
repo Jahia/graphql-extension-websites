@@ -14,55 +14,82 @@ The purpose of this module is to allow the creation, deletion, import and export
 - Go to the page **"Jahia GraphQL Core Provider : graphql-playground"** (JAHIA_URL/modules/graphql-dxm-provider/tools/graphql-playground.jsp)
 
 #### Creation
-```
-    mutation {
-      admin {
+```graphql
+mutation {
+    admin {
         jahia {
-          createSiteByKey(
-            siteKey: "SITE_KEY"
-            serverName: "SERVER_NAME"
-            title: "SITE_TITLE"
-            templateSet: "TEMPLATE_SET"
-            locale: "LOCALE"
-          )
+            createSiteByKey(
+                siteKey: "SITE_KEY"
+                serverName: "SERVER_NAME"
+                title: "SITE_TITLE"
+                templateSet: "TEMPLATE_SET"
+                locale: "LOCALE"
+            )
         }
-      }
     }
+}
 ```
 #### Deletion
-```
-    mutation {
-      admin {
+```graphql
+mutation {
+    admin {
         jahia {
-          deleteSiteByKey(siteKey: "SITE_KEY")
+            deleteSiteByKey(siteKey: "SITE_KEY")
         }
-      }
     }
+}
 ```
 #### Import
-```
-    mutation {
-      admin {
+```graphql
+mutation {
+    admin {
         jahia {
-          importWebsite(
-            importPath: "RELATIVE_IMPORT_PATH",
-            siteKey: "SITE_KEY"
-          )
+            importWebsite(
+                importPath: "RELATIVE_IMPORT_PATH",
+                siteKey: "SITE_KEY"
+            )
         }
-      }
     }
+}
 ```
 #### Export
-```
-    mutation {
-      admin {
+```graphql
+mutation {
+    admin {
         jahia {
-          exportWebsite(
-            siteKey: "SITE_KEY",
-            exportPath: "RELATIVE_EXPORT_PATH",
-            onlyStaging: true
-          )
+            exportWebsite(
+                siteKey: "SITE_KEY",
+                exportPath: "RELATIVE_EXPORT_PATH",
+                onlyStaging: true
+            )
         }
-      }
     }
+}
+```
+
+#### Export All Sites To AWS S3
+- Configure your S3 endpoint in the Jahia configuration file
+```graphql
+mutation {
+    admin {
+        jahia {
+            configuration( pid: "org.jahia.community.graphql.websites" ) {
+                awsRegion: value(name:"aws.s3.region", value:"us-east-2"),
+                awsBucketName: value(name:"aws.s3.bucketName", value:"graphqltestbucketonaws"),
+                awsAccessKey: value(name:"aws.s3.accessKey", value:"test")
+                awsSecretAccessKey: value(name:"aws.s3.secretAccessKey", value:"test")
+            }
+        }
+    }
+}
+```
+- Then launch the export of all sites
+```graphql
+mutation {
+    admin {
+        jahia {
+            exportAllSites
+        }
+    }
+}
 ```
