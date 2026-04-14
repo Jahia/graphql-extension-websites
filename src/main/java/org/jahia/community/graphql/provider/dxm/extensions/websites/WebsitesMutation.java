@@ -55,14 +55,13 @@ import java.util.*;
 
 @GraphQLTypeExtension(GqlJahiaAdminMutation.class)
 public class WebsitesMutation {
-    private static Logger logger = LoggerFactory.getLogger(WebsitesMutation.class);
-
     private static final String JAHIA_RELEASE = "JahiaRelease";
     private static final Logger LOGGER = LoggerFactory.getLogger(WebsitesMutation.class);
     private static final String ERR_MSG_ERR_WHEN_GETTING_TPL = "Error when getting templates";
     private static final String ERR_MSG_IMP_TO_CREATE_SITE = "Impossible to create website %s";
     private static final String FILES = "files";
     private static final String SITE = "site";
+    private static final Logger logger = LoggerFactory.getLogger(WebsitesMutation.class);
 
     @GraphQLField
     @GraphQLDescription("Create a website")
@@ -109,15 +108,17 @@ public class WebsitesMutation {
     public static Boolean deleteSiteByKey(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey
     ) {
+        boolean success = Boolean.FALSE;
         try {
             final JahiaSitesService jahiaSitesServices = ServicesRegistry.getInstance().getJahiaSitesService();
             final JahiaSite jahiaSite = jahiaSitesServices.getSiteByKey(siteKey);
             jahiaSitesServices.removeSite(jahiaSite);
-            return Boolean.TRUE;
-        } catch (JahiaException ex) {
+            success = Boolean.TRUE;
+        } catch (JahiaException | RuntimeException ex) {
             LOGGER.error(String.format(ERR_MSG_IMP_TO_CREATE_SITE, siteKey), ex);
+        } finally {
+            return success;
         }
-        return Boolean.FALSE;
     }
 
     @GraphQLField
@@ -328,12 +329,6 @@ public class WebsitesMutation {
         return successful;
     }
 
-    public enum ExportAllSitesResults {
-        SUCCESS,
-        FAILURE,
-        AWS_S3_BUCKET_NOT_CONFIGURED
-    }
-
     @GraphQLField
     @GraphQLDescription("Export All Sites towards the configured S3 bucket")
     @GraphQLRequiresPermission("admin")
@@ -408,5 +403,11 @@ public class WebsitesMutation {
                     .build()).completionFuture().join().response().eTag());
         }
         logger.info(">>> END upload exportFile: {}", exportFile);
+    }
+
+    public enum ExportAllSitesResults {
+        SUCCESS,
+        FAILURE,
+        AWS_S3_BUCKET_NOT_CONFIGURED
     }
 }
