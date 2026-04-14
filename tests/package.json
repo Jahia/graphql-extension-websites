@@ -6,7 +6,7 @@
     "@apollo/client": "^3.14.0",
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
-    "@cypress/code-coverage": "^3.9.11",
+    "@cypress/code-coverage": "^4.0.3",
     "@cypress/webpack-preprocessor": "^5.9.1",
     "@faker-js/faker": "^10.0.0",
     "@jahia/cypress": "^7.0.0",
@@ -17,7 +17,7 @@
     "babel-plugin-istanbul": "^6.1.1",
     "compare-versions": "^6.1.1",
     "cross-fetch": "3.1.6",
-    "cypress": "15.7.0",
+    "cypress": "15.13.1",
     "cypress-file-upload": "^5.0.8",
     "cypress-iframe": "^1.0.1",
     "cypress-mailpit": "^1.4.0",
@@ -41,14 +41,14 @@
     "jahia-reporter": "^0.4.2",
     "mocha": "^10.0.0",
     "mocha-junit-reporter": "^2.2.0",
-    "mochawesome": "^6.3.1",
+    "mochawesome": "^7.1.4",
     "mochawesome-merge": "^4.2.0",
-    "mochawesome-report-generator": "^5.2.0",
+    "mochawesome-report-generator": "^6.3.2",
     "prettier": "^2.0.0",
     "source-map-support": "^0.5.20",
     "supports-color": "^9.0.2",
     "typescript": "^4.4.4",
-    "webpack": "5.94.0"
+    "webpack": "5.104.1"
   },
   "scripts": {
     "e2e:ci": "cypress run",
@@ -68,5 +68,9 @@
   "bugs": {
     "url": "https://github.com/Jahia/graphql-extension-websites/issues"
   },
-  "homepage": "https://github.com/Jahia/graphql-extension-websites#readme"
+  "homepage": "https://github.com/Jahia/graphql-extension-websites#readme",
+  "resolutions": {
+    "axios": "^1.15.0",
+    "serialize-javascript": "^7.0.5"
+  }
 }
