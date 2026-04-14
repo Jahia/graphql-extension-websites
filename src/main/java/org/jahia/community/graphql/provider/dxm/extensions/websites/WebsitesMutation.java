@@ -300,7 +300,7 @@ public class WebsitesMutation {
                 final String installedModule = installedModulesIterator.next();
                 installedModules.add(siteProperties.getString(installedModule));
             }
-            JCRObservationManager.doWithOperationType(null, JCRObservationManager.IMPORT, (JCRSessionWrapper jcrSession) -> {
+            JCRObservationManager.doWithOperationType(null, JCRObservationManager.IMPORT, (JCRSessionWrapper unusedSession) -> {
                 try {
                     SiteCreationInfo siteCreationInfo = SiteCreationInfo.builder().
                             siteKey(infos.getSiteKey()).
