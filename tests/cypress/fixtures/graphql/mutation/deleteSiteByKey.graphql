@@ -1,0 +1,7 @@
+mutation DeleteSiteByKey($siteKey: String!) {
+    admin {
+        jahia {
+            deleteSiteByKey(siteKey: $siteKey)
+        }
+    }
+}

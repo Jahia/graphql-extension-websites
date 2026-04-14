@@ -1,0 +1,7 @@
+mutation ExportWebsite($siteKey: String!, $exportPath: String!, $onlyStaging: Boolean!) {
+    admin {
+        jahia {
+            exportWebsite(siteKey: $siteKey, exportPath: $exportPath, onlyStaging: $onlyStaging)
+        }
+    }
+}

@@ -1,0 +1,10 @@
+- karafCommand: "log:log 'START - provisioning'"
+
+- karafCommand: "log:log 'START - Install graphql-extension-websites dependencies'"
+- installBundle:
+      - 'mvn:org.jahia.modules/graphql-dxm-provider/LATEST'
+  autoStart: true
+  uninstallPreviousVersion: false
+- karafCommand: "log:log 'END - Install graphql-extension-websites dependencies'"
+
+- karafCommand: "log:log 'END - provisioning'"

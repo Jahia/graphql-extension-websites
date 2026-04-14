@@ -1,0 +1,19 @@
+mutation CreateSiteByKey(
+    $siteKey: String!
+    $serverName: String!
+    $title: String!
+    $templateSet: String!
+    $locale: String!
+) {
+    admin {
+        jahia {
+            createSiteByKey(
+                siteKey: $siteKey
+                serverName: $serverName
+                title: $title
+                templateSet: $templateSet
+                locale: $locale
+            )
+        }
+    }
+}
