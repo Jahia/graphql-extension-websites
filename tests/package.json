@@ -48,7 +48,7 @@
     "source-map-support": "^0.5.20",
     "supports-color": "^9.0.2",
     "typescript": "^4.4.4",
-    "webpack": "5.94.0"
+    "webpack": "5.104.1"
   },
   "scripts": {
     "e2e:ci": "cypress run",
