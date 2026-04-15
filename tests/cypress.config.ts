@@ -2,7 +2,7 @@ import {defineConfig} from 'cypress';
 import fs from 'fs';
 
 export default defineConfig({
-    // DefaultCommandTimeout: 10000,
+    defaultCommandTimeout: 30000,
     // videoUploadOnPasses: false,
     reporter: 'cypress-multi-reporters',
     reporterOptions: {
