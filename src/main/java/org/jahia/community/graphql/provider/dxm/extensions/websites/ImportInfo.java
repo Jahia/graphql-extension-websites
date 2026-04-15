@@ -183,6 +183,7 @@ public class ImportInfo implements Serializable {
         this.legacyDefinitions = legacyDefinitions;
     }
 
+    @SuppressWarnings("java:S5738")
     public void setLegacyImport(boolean legacyImport) {
         this.legacyImport = legacyImport;
         if (legacyImport) {

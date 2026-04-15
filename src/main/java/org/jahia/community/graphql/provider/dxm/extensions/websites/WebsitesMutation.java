@@ -61,7 +61,9 @@ public class WebsitesMutation {
     private static final String ERR_MSG_IMP_TO_CREATE_SITE = "Impossible to create website %s";
     private static final String FILES = "files";
     private static final String SITE = "site";
-    private static final Logger logger = LoggerFactory.getLogger(WebsitesMutation.class);
+    private static final String SHARED_FILES = "/shared/files/";
+    private static final String SHARED_MASHUPS = "/shared/mashups/";
+    private static final String SITES_PATH_PREFIX = "/sites/"; // NOSONAR java:S1075
 
     @GraphQLField
     @GraphQLDescription("Create a website")
@@ -116,9 +118,8 @@ public class WebsitesMutation {
             success = Boolean.TRUE;
         } catch (JahiaException | RuntimeException ex) {
             LOGGER.error(String.format(ERR_MSG_IMP_TO_CREATE_SITE, siteKey), ex);
-        } finally {
-            return success;
         }
+        return success;
     }
 
     @GraphQLField
@@ -249,7 +250,7 @@ public class WebsitesMutation {
 
     private static void importFiles(ImportExportBaseService importExportBaseService, JahiaSitesService jahiaSitesService, List<ImportInfo> importsInfos, ImportInfo infos) {
         try {
-            final File file = ImportUpdateService.getInstance().updateImport(
+            final File file = ImportUpdateService.getInstance().updateImport( // NOSONAR java:S5738
                     infos.getImportFile(),
                     infos.getImportFileName(),
                     infos.getType(),
@@ -258,11 +259,10 @@ public class WebsitesMutation {
 
             final Map<String, String> pathMapping = JCRSessionFactory.getInstance()
                     .getCurrentUserSession().getPathMapping();
-            String pathStart = "/sites/";
-            pathMapping.put("/shared/files/", pathStart + system.getSiteKey() + "/files/");
-            pathMapping.put("/shared/mashups/", pathStart + system.getSiteKey() + "/portlets/");
+            pathMapping.put(SHARED_FILES, SITES_PATH_PREFIX + system.getSiteKey() + "/files/");
+            pathMapping.put(SHARED_MASHUPS, SITES_PATH_PREFIX + system.getSiteKey() + "/portlets/");
             importsInfos.stream().filter(infos2 -> (infos2.getOldSiteKey() != null && infos2.getSiteKey() != null && !infos2.getOldSiteKey().equals(infos2.getSiteKey()))).forEachOrdered((ImportInfo infos2)
-                    -> pathMapping.put(pathStart + infos2.getOldSiteKey(), pathStart + infos2.getSiteKey())
+                    -> pathMapping.put(SITES_PATH_PREFIX + infos2.getOldSiteKey(), SITES_PATH_PREFIX + infos2.getSiteKey())
             );
 
             JCRTemplate.getInstance().doExecuteWithSystemSession((JCRSessionWrapper session) -> {
@@ -289,7 +289,7 @@ public class WebsitesMutation {
         try (InputStream inputSite = new FileInputStream(Paths.get(absoluteImportPath, infos.getSiteKey(), "site.properties").toString())) {
             final ExtendedProperties siteProperties = new ExtendedProperties();
             siteProperties.load(inputSite);
-            final File file = ImportUpdateService.getInstance().updateImport(
+            final File file = ImportUpdateService.getInstance().updateImport( // NOSONAR java:S5738
                     infos.getImportFile(),
                     infos.getImportFileName(),
                     infos.getType(),
@@ -343,7 +343,7 @@ public class WebsitesMutation {
             if (websitesConfig.isConfigured()) {
                 uploadExport(exportFile, websitesConfig);
             } else {
-                logger.error("AWS S3 bucket is not configured");
+                LOGGER.error("AWS S3 bucket is not configured");
                 return ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED;
             }
         } catch (Exception e) {
@@ -354,8 +354,8 @@ public class WebsitesMutation {
         return ExportAllSitesResults.SUCCESS;
     }
 
-    private static void exportAllSites(Path exportFile) throws Exception {
-        logger.info("<<< Export all sites job");
+    private static void exportAllSites(Path exportFile) throws IOException, RepositoryException, JahiaException, SAXException, TransformerException {
+        LOGGER.info("<<< Export all sites job");
         Map<String, Object> params = new HashMap<>();
         params.put(ImportExportService.VIEW_CONTENT, true);
         params.put(ImportExportService.VIEW_VERSION, false);
@@ -380,7 +380,7 @@ public class WebsitesMutation {
         } finally {
             jcrSessionFactory.setCurrentUser(currentUser);
         }
-        logger.info(">>> END Export all sites job");
+        LOGGER.info(">>> END Export all sites job");
     }
 
     private static void uploadExport(Path exportFile, GraphQLWebsitesConfig websitesConfig) {
@@ -388,7 +388,7 @@ public class WebsitesMutation {
         final String awsS3AccessKey = websitesConfig.getAwsS3AccessKey();
         final String awsS3BucketName = websitesConfig.getAwsS3BucketName();
         final String awsS3SecretAccessKey = websitesConfig.getAwsS3SecretAccessKey();
-        logger.info("<<< Upload exportFile: {}", exportFile);
+        LOGGER.info("<<< Upload exportFile: {}", exportFile);
         try (S3TransferManager s3TransferManager = S3TransferManager.builder()
                 .s3Client(S3AsyncClient.crtBuilder()
                         .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(awsS3AccessKey, awsS3SecretAccessKey)))
@@ -397,12 +397,12 @@ public class WebsitesMutation {
                         .minimumPartSizeInBytes(8 * SizeConstant.MB)
                         .build())
                 .build()) {
-            logger.info("ETag: {}", s3TransferManager.uploadFile(builder -> builder.putObjectRequest(b -> b.bucket(awsS3BucketName).key(exportFile.getFileName().toString()))
+            LOGGER.info("ETag: {}", s3TransferManager.uploadFile(builder -> builder.putObjectRequest(b -> b.bucket(awsS3BucketName).key(exportFile.getFileName().toString()))
                     .addTransferListener(LoggingTransferListener.create())
                     .source(exportFile)
                     .build()).completionFuture().join().response().eTag());
         }
-        logger.info(">>> END upload exportFile: {}", exportFile);
+        LOGGER.info(">>> END upload exportFile: {}", exportFile);
     }
 
     public enum ExportAllSitesResults {
