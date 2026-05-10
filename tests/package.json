@@ -70,7 +70,10 @@
   },
   "homepage": "https://github.com/Jahia/graphql-extension-websites#readme",
   "resolutions": {
-    "axios": "^1.15.0",
+    "@babel/plugin-transform-modules-systemjs": "^7.29.4",
+    "axios": "^1.16.0",
+    "fast-uri": "^3.1.2",
+    "ip-address": "^10.1.1",
     "serialize-javascript": "^7.0.5"
   }
 }
