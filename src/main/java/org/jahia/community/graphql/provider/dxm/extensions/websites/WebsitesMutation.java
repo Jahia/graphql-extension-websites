@@ -59,6 +59,7 @@ public class WebsitesMutation {
     private static final Logger LOGGER = LoggerFactory.getLogger(WebsitesMutation.class);
     private static final String ERR_MSG_ERR_WHEN_GETTING_TPL = "Error when getting templates";
     private static final String ERR_MSG_IMP_TO_CREATE_SITE = "Impossible to create website %s";
+    private static final String ERR_MSG_IMP_TO_DELETE_SITE = "Impossible to delete website %s";
     private static final String FILES = "files";
     private static final String SITE = "site";
     private static final String SHARED_FILES = "/shared/files/";
@@ -114,10 +115,14 @@ public class WebsitesMutation {
         try {
             final JahiaSitesService jahiaSitesServices = ServicesRegistry.getInstance().getJahiaSitesService();
             final JahiaSite jahiaSite = jahiaSitesServices.getSiteByKey(siteKey);
+            if (jahiaSite == null) {
+                LOGGER.error(String.format(ERR_MSG_IMP_TO_DELETE_SITE + ": site not found", siteKey));
+                return Boolean.FALSE;
+            }
             jahiaSitesServices.removeSite(jahiaSite);
             success = Boolean.TRUE;
         } catch (JahiaException | RuntimeException ex) {
-            LOGGER.error(String.format(ERR_MSG_IMP_TO_CREATE_SITE, siteKey), ex);
+            LOGGER.error(String.format(ERR_MSG_IMP_TO_DELETE_SITE, siteKey), ex);
         }
         return success;
     }
@@ -132,6 +137,13 @@ public class WebsitesMutation {
             @GraphQLName("onlyStaging") @GraphQLDescription("Export only staging content") boolean onlyStaging
     ) {
         try {
+            final SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
+            final Path exportsBaseDir = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports").toAbsolutePath().normalize();
+            final Path resolvedExportPath = exportsBaseDir.resolve(exportPath).normalize();
+            if (!resolvedExportPath.startsWith(exportsBaseDir)) {
+                LOGGER.error("exportWebsite: exportPath '{}' resolves outside the allowed exports directory", exportPath);
+                return Boolean.FALSE;
+            }
             final Map<String, Object> params = new HashMap<>(6);
             params.put(ImportExportService.VIEW_CONTENT, true);
             params.put(ImportExportService.VIEW_VERSION, false);
@@ -139,7 +151,7 @@ public class WebsitesMutation {
             params.put(ImportExportService.VIEW_METADATA, true);
             params.put(ImportExportService.VIEW_JAHIALINKS, true);
             params.put(ImportExportService.VIEW_WORKFLOW, true);
-            params.put(ImportExportService.SERVER_DIRECTORY, exportPath);
+            params.put(ImportExportService.SERVER_DIRECTORY, resolvedExportPath.toString());
             params.put(ImportExportService.INCLUDE_ALL_FILES, true);
             params.put(ImportExportService.INCLUDE_TEMPLATES, true);
             params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
@@ -147,7 +159,7 @@ public class WebsitesMutation {
             params.put(ImportExportService.INCLUDE_LIVE_EXPORT, !onlyStaging);
             params.put(ImportExportService.INCLUDE_USERS, true);
             params.put(ImportExportService.INCLUDE_ROLES, true);
-            final String cleanupXsl = BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
+            final String cleanupXsl = settingsBean.getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
             params.put(ImportExportService.XSL_PATH, cleanupXsl);
 
             final List<JCRSiteNode> siteList = new ArrayList<>();
@@ -169,7 +181,12 @@ public class WebsitesMutation {
                                         @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) throws IOException {
         LOGGER.info("Processing Import");
         Boolean successful = Boolean.TRUE;
-        final Path absoluteImportPath = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath(), importPath);
+        final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath()).toAbsolutePath().normalize();
+        final Path absoluteImportPath = importsBaseDir.resolve(importPath).normalize();
+        if (!absoluteImportPath.startsWith(importsBaseDir)) {
+            LOGGER.error("importWebsite: importPath '{}' resolves outside the allowed imports directory", importPath);
+            return Boolean.FALSE;
+        }
         try (InputStream input = new FileInputStream(Paths.get(absoluteImportPath.toString(), "export.properties").toString())) {
             final Properties exportProperties = new Properties();
             exportProperties.load(input);
@@ -236,7 +253,8 @@ public class WebsitesMutation {
 
     private static void importUsers(ImportExportBaseService importExportBaseService, List<ImportInfo> importsInfos) {
         for (ImportInfo infos : importsInfos) {
-            if (infos.isSelected() && infos.getImportFileName().equals(ImportExportBaseService.USERS_XML)) {
+            // Match USERS_ZIP to align with the ImportInfo wired in importWebsite()
+            if (infos.isSelected() && infos.getImportFileName().equals(ImportExportBaseService.USERS_ZIP)) {
                 File file = infos.getImportFile();
                 try {
                     importExportBaseService.importUsers(file);
