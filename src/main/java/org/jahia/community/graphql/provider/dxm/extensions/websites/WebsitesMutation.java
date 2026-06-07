@@ -144,6 +144,11 @@ public class WebsitesMutation {
                 LOGGER.error("exportWebsite: exportPath '{}' resolves outside the allowed exports directory", exportPath);
                 return Boolean.FALSE;
             }
+            // Jahia rejects a server export directory that already contains files
+            // (ImportExportBaseService.isValidServerDirectory requires it to be empty or
+            // non-existent). Remove any previous export at this path so repeated exports
+            // to the same exportPath are idempotent instead of failing with a 403.
+            FileUtils.deleteQuietly(resolvedExportPath.toFile());
             final Map<String, Object> params = new HashMap<>(6);
             params.put(ImportExportService.VIEW_CONTENT, true);
             params.put(ImportExportService.VIEW_VERSION, false);
