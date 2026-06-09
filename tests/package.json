@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Cypress tests for the Jahia GraphQL Extension Websites module",
   "devDependencies": {
-    "@apollo/client": "^3.14.0",
+    "@apollo/client": "^4.2.3",
     "@babel/core": "^7.29.7",
     "@babel/preset-env": "^7.25.3",
     "@cypress/code-coverage": "^4.0.3",
