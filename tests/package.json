@@ -12,7 +12,7 @@
     "@jahia/cypress": "^7.0.0",
     "@jahia/eslint-config": "^2.1.2",
     "@typescript-eslint/eslint-plugin": "^5.2.0",
-    "@typescript-eslint/parser": "^5.2.0",
+    "@typescript-eslint/parser": "^8.61.0",
     "babel-loader": "^8.3.0",
     "babel-plugin-istanbul": "^8.0.0",
     "compare-versions": "^6.1.1",
