@@ -70,7 +70,7 @@ public class WebsitesMutation {
 
     @GraphQLField
     @GraphQLDescription("Create a website")
-    @GraphQLRequiresPermission("admin")
+    @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean createSiteByKey(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("serverName") @GraphQLDescription("Server name") String serverName,
@@ -109,7 +109,7 @@ public class WebsitesMutation {
 
     @GraphQLField
     @GraphQLDescription("Delete a website")
-    @GraphQLRequiresPermission("admin")
+    @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean deleteSiteByKey(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey
     ) {
@@ -132,7 +132,7 @@ public class WebsitesMutation {
     @GraphQLField
     @GraphQLDescription("Export a website")
     @GraphQLAsync
-    @GraphQLRequiresPermission("admin")
+    @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean exportWebsite(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("exportPath") @GraphQLDescription("Export path") String exportPath,
@@ -191,7 +191,7 @@ public class WebsitesMutation {
 
     @GraphQLField
     @GraphQLDescription("Import a website")
-    @GraphQLRequiresPermission("admin")
+    @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean importWebsite(@GraphQLName("importPath") @GraphQLDescription("Import path") String importPath,
                                         @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) throws IOException {
         LOGGER.info("Processing Import");
@@ -372,7 +372,7 @@ public class WebsitesMutation {
 
     @GraphQLField
     @GraphQLDescription("Export All Sites towards the configured S3 bucket")
-    @GraphQLRequiresPermission("admin")
+    @GraphQLRequiresPermission("websitesAdmin")
     public static ExportAllSitesResults exportAllSites() {
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
         SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
