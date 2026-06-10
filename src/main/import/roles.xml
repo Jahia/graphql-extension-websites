@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<roles jcr:primaryType="jnt:roles"
+       xmlns:jcr="http://www.jcp.org/jcr/1.0"
+       xmlns:j="http://www.jahia.org/jahia/1.0"
+       xmlns:jnt="http://www.jahia.org/jahia/nt/1.0">
+
+    <graphql-extension-websites-administrator jcr:primaryType="jnt:role"
+                                              j:nodeTypes="rep:root"
+                                              j:roleGroup="server-role"
+                                              j:permissionNames="jcr:read_default graphqlAdminMutation websitesAdmin"
+                                              j:privilegedAccess="true">
+        <j:translation_en jcr:primaryType="jnt:translation"
+                          jcr:language="en"
+                          jcr:title="GraphQL Extension Websites administrator"
+                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, delete, export, import) without requiring full server administrator rights"/>
+    </graphql-extension-websites-administrator>
+</roles>
