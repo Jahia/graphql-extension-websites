@@ -83,6 +83,22 @@
             <version>2.0.16</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- Test scope. JUnit 4 is used deliberately: the jahia-modules parent pins the
+             surefire-junit4 provider, so a JUnit 5/Jupiter test would compile but report
+             "Tests run: 0" (silently skipped). -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.26.3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

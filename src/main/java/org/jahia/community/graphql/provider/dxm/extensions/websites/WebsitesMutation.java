@@ -65,6 +65,8 @@ public class WebsitesMutation {
     private static final String SHARED_FILES = "/shared/files/";
     private static final String SHARED_MASHUPS = "/shared/mashups/";
     private static final String SITES_PATH_PREFIX = "/sites/"; // NOSONAR java:S1075
+    private static final double S3_TARGET_THROUGHPUT_GBPS = 20.0;
+    private static final long S3_MINIMUM_PART_SIZE_BYTES = 8L * SizeConstant.MB;
 
     @GraphQLField
     @GraphQLDescription("Create a website")
@@ -139,9 +141,16 @@ public class WebsitesMutation {
         try {
             final SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
             final Path exportsBaseDir = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports").toAbsolutePath().normalize();
-            final Path resolvedExportPath = exportsBaseDir.resolve(exportPath).normalize();
-            if (!resolvedExportPath.startsWith(exportsBaseDir)) {
-                LOGGER.error("exportWebsite: exportPath '{}' resolves outside the allowed exports directory", exportPath);
+            final Path resolvedExportPath;
+            try {
+                resolvedExportPath = PathSecurity.resolveContained(exportsBaseDir, exportPath);
+            } catch (IllegalArgumentException ex) {
+                LOGGER.error("exportWebsite: rejected exportPath '{}': {}", exportPath, ex.getMessage());
+                return Boolean.FALSE;
+            }
+            final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
+            if (site == null) {
+                LOGGER.error("exportWebsite: site '{}' not found", siteKey);
                 return Boolean.FALSE;
             }
             // Jahia rejects a server export directory that already contains files
@@ -168,10 +177,11 @@ public class WebsitesMutation {
             params.put(ImportExportService.XSL_PATH, cleanupXsl);
 
             final List<JCRSiteNode> siteList = new ArrayList<>();
-            final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
             siteList.add((JCRSiteNode) site);
             final ImportExportBaseService importExportBaseService = ServicesRegistry.getInstance().getImportExportService();
-            importExportBaseService.exportSites(new ByteArrayOutputStream(), params, siteList);
+            try (ByteArrayOutputStream exportSink = new ByteArrayOutputStream()) {
+                importExportBaseService.exportSites(exportSink, params, siteList);
+            }
             return Boolean.TRUE;
         } catch (JahiaException | RepositoryException | IOException | SAXException | TransformerException ex) {
             LOGGER.error(String.format("Impossible to export website %s", siteKey), ex);
@@ -187,9 +197,13 @@ public class WebsitesMutation {
         LOGGER.info("Processing Import");
         Boolean successful = Boolean.TRUE;
         final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath()).toAbsolutePath().normalize();
-        final Path absoluteImportPath = importsBaseDir.resolve(importPath).normalize();
-        if (!absoluteImportPath.startsWith(importsBaseDir)) {
-            LOGGER.error("importWebsite: importPath '{}' resolves outside the allowed imports directory", importPath);
+        final Path absoluteImportPath;
+        try {
+            absoluteImportPath = PathSecurity.resolveContained(importsBaseDir, importPath);
+            // siteKey is untrusted GraphQL input used as a directory name; reject traversal.
+            PathSecurity.resolveContained(absoluteImportPath, siteKey);
+        } catch (IllegalArgumentException ex) {
+            LOGGER.error("importWebsite: rejected import location (importPath '{}', siteKey '{}'): {}", importPath, siteKey, ex.getMessage());
             return Boolean.FALSE;
         }
         try (InputStream input = new FileInputStream(Paths.get(absoluteImportPath.toString(), "export.properties").toString())) {
@@ -279,6 +293,10 @@ public class WebsitesMutation {
                     infos.getType(),
                     new Version(infos.getOriginatingJahiaRelease()));
             final JahiaSite system = jahiaSitesService.getSiteByKey(JahiaSitesService.SYSTEM_SITE_KEY);
+            if (system == null) {
+                LOGGER.error("Cannot import files: system site '{}' not found", JahiaSitesService.SYSTEM_SITE_KEY);
+                return;
+            }
 
             final Map<String, String> pathMapping = JCRSessionFactory.getInstance()
                     .getCurrentUserSession().getPathMapping();
@@ -416,8 +434,8 @@ public class WebsitesMutation {
                 .s3Client(S3AsyncClient.crtBuilder()
                         .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(awsS3AccessKey, awsS3SecretAccessKey)))
                         .region(Region.of(awsS3Region))
-                        .targetThroughputInGbps(20.0)
-                        .minimumPartSizeInBytes(8 * SizeConstant.MB)
+                        .targetThroughputInGbps(S3_TARGET_THROUGHPUT_GBPS)
+                        .minimumPartSizeInBytes(S3_MINIMUM_PART_SIZE_BYTES)
                         .build())
                 .build()) {
             LOGGER.info("ETag: {}", s3TransferManager.uploadFile(builder -> builder.putObjectRequest(b -> b.bucket(awsS3BucketName).key(exportFile.getFileName().toString()))
