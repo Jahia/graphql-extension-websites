@@ -46,6 +46,7 @@ import software.amazon.awssdk.transfer.s3.progress.LoggingTransferListener;
 import javax.jcr.RepositoryException;
 import javax.xml.transform.TransformerException;
 import java.io.*;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -53,13 +54,28 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
+/**
+ * GraphQL mutation extensions for Jahia website lifecycle operations (create, delete,
+ * export, import, bulk export-to-S3).
+ *
+ * <p><b>Permission:</b> every mutation in this class is gated by the
+ * {@code websitesAdmin} permission via {@link GraphQLRequiresPermission}.  The caller
+ * must hold that permission; unauthenticated or insufficiently privileged requests are
+ * rejected by the GraphQL security layer before the method body executes.
+ *
+ * <p><b>Privilege-scope caveat for {@link #exportAllSites()}:</b> that mutation
+ * temporarily switches the active JCR session to the root user so that all content
+ * (including content the calling user cannot normally read) is included in the export.
+ * It exports the entire Jahia instance.  Callers granted {@code websitesAdmin} should
+ * understand this elevation.  See the README for configuration details.
+ */
 @GraphQLTypeExtension(GqlJahiaAdminMutation.class)
 public class WebsitesMutation {
     private static final String JAHIA_RELEASE = "JahiaRelease";
     private static final Logger LOGGER = LoggerFactory.getLogger(WebsitesMutation.class);
     private static final String ERR_MSG_ERR_WHEN_GETTING_TPL = "Error when getting templates";
-    private static final String ERR_MSG_IMP_TO_CREATE_SITE = "Impossible to create website %s";
-    private static final String ERR_MSG_IMP_TO_DELETE_SITE = "Impossible to delete website %s";
+    private static final String ERR_MSG_IMP_TO_CREATE_SITE = "Impossible to create website '{}'";
+    private static final String ERR_MSG_IMP_TO_DELETE_SITE = "Impossible to delete website '{}'";
     private static final String FILES = "files";
     private static final String SITE = "site";
     private static final String SHARED_FILES = "/shared/files/";
@@ -68,6 +84,12 @@ public class WebsitesMutation {
     private static final double S3_TARGET_THROUGHPUT_GBPS = 20.0;
     private static final long S3_MINIMUM_PART_SIZE_BYTES = 8L * SizeConstant.MB;
 
+    /**
+     * Creates a Jahia website with the supplied parameters.
+     *
+     * @return {@code true} on success; {@code false} if site creation fails (e.g. the
+     *         template set is not installed, or a site with that key already exists)
+     */
     @GraphQLField
     @GraphQLDescription("Create a website")
     @GraphQLRequiresPermission("websitesAdmin")
@@ -96,17 +118,23 @@ public class WebsitesMutation {
                     ServicesRegistry.getInstance().getJahiaSitesService().addSite(siteCreationInfo, session);
                     result = Boolean.TRUE;
                 } catch (IOException | JahiaException ex) {
-                    LOGGER.error(String.format(ERR_MSG_IMP_TO_CREATE_SITE, siteKey), ex);
+                    LOGGER.error(ERR_MSG_IMP_TO_CREATE_SITE, siteKey, ex);
                     result = Boolean.FALSE;
                 }
                 return result;
             });
         } catch (RepositoryException ex) {
-            LOGGER.error(String.format(ERR_MSG_IMP_TO_CREATE_SITE, siteKey), ex);
+            LOGGER.error(ERR_MSG_IMP_TO_CREATE_SITE, siteKey, ex);
         }
         return Boolean.FALSE;
     }
 
+    /**
+     * Deletes the Jahia website identified by {@code siteKey}.
+     *
+     * @return {@code true} on success; {@code false} if the site was not found or deletion
+     *         fails
+     */
     @GraphQLField
     @GraphQLDescription("Delete a website")
     @GraphQLRequiresPermission("websitesAdmin")
@@ -118,19 +146,46 @@ public class WebsitesMutation {
             final JahiaSitesService jahiaSitesServices = ServicesRegistry.getInstance().getJahiaSitesService();
             final JahiaSite jahiaSite = jahiaSitesServices.getSiteByKey(siteKey);
             if (jahiaSite == null) {
-                LOGGER.error(String.format(ERR_MSG_IMP_TO_DELETE_SITE + ": site not found", siteKey));
+                // Fix A: SLF4J parameterized logging — no String.format, no concatenation
+                LOGGER.error("Impossible to delete website '{}': site not found", siteKey);
                 return Boolean.FALSE;
             }
             jahiaSitesServices.removeSite(jahiaSite);
             success = Boolean.TRUE;
         } catch (JahiaException | RuntimeException ex) {
-            LOGGER.error(String.format(ERR_MSG_IMP_TO_DELETE_SITE, siteKey), ex);
+            LOGGER.error(ERR_MSG_IMP_TO_DELETE_SITE, siteKey, ex);
         }
         return success;
     }
 
+    /**
+     * Exports a single website to an on-disk directory.
+     *
+     * <p>This mutation is {@link GraphQLAsync}: the GraphQL response is returned before the
+     * export completes.  Clients cannot poll for completion via this mutation.
+     *
+     * @param siteKey      key of the site to export
+     * @param exportPath   path relative to {@code jahiaVarDiskPath/exports/}; must not
+     *                     escape that directory
+     * @param onlyStaging  when {@code true} only staging content is included
+     * @return {@code true} on success; {@code false} on error or invalid path
+     */
     @GraphQLField
     @GraphQLDescription("Export a website")
+    /**
+     * Resolves a user-supplied path against a base directory using {@link PathSecurity},
+     * returning {@code null} (and logging) instead of propagating {@link IllegalArgumentException}
+     * when the path is rejected. Extracted to avoid a nested try block (Sonar S1141).
+     */
+    private static Path resolveContainedOrNull(Path baseDir, String candidate, String operation) {
+        try {
+            return PathSecurity.resolveContained(baseDir, candidate);
+        } catch (IllegalArgumentException ex) {
+            LOGGER.error("{}: rejected path '{}': {}", operation, candidate, ex.getMessage());
+            return null;
+        }
+    }
+
     @GraphQLAsync
     @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean exportWebsite(
@@ -141,16 +196,20 @@ public class WebsitesMutation {
         try {
             final SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
             final Path exportsBaseDir = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports").toAbsolutePath().normalize();
-            final Path resolvedExportPath;
-            try {
-                resolvedExportPath = PathSecurity.resolveContained(exportsBaseDir, exportPath);
-            } catch (IllegalArgumentException ex) {
-                LOGGER.error("exportWebsite: rejected exportPath '{}': {}", exportPath, ex.getMessage());
+            final Path resolvedExportPath = resolveContainedOrNull(exportsBaseDir, exportPath, "exportWebsite");
+            if (resolvedExportPath == null) {
                 return Boolean.FALSE;
             }
             final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
             if (site == null) {
                 LOGGER.error("exportWebsite: site '{}' not found", siteKey);
+                return Boolean.FALSE;
+            }
+            // Refuse to delete if the resolved path is a symlink — a symlink at the
+            // export location could redirect deletion to an arbitrary target outside the
+            // exports directory (Fix J continuation).
+            if (Files.isSymbolicLink(resolvedExportPath)) {
+                LOGGER.error("exportWebsite: refused to delete '{}': path is a symbolic link", resolvedExportPath);
                 return Boolean.FALSE;
             }
             // Jahia rejects a server export directory that already contains files
@@ -179,21 +238,36 @@ public class WebsitesMutation {
             final List<JCRSiteNode> siteList = new ArrayList<>();
             siteList.add((JCRSiteNode) site);
             final ImportExportBaseService importExportBaseService = ServicesRegistry.getInstance().getImportExportService();
+            // The export content is produced via SERVER_DIRECTORY in params; the OutputStream
+            // argument is required by the API. Use a try-with-resources stream sink (matching
+            // the proven upstream behavior) rather than discarding it.
             try (ByteArrayOutputStream exportSink = new ByteArrayOutputStream()) {
                 importExportBaseService.exportSites(exportSink, params, siteList);
             }
             return Boolean.TRUE;
         } catch (JahiaException | RepositoryException | IOException | SAXException | TransformerException ex) {
-            LOGGER.error(String.format("Impossible to export website %s", siteKey), ex);
+            LOGGER.error("Impossible to export website '{}'", siteKey, ex);
         }
         return Boolean.FALSE;
     }
 
+    /**
+     * Imports a website from a prepared directory on disk.
+     *
+     * <p>The directory at {@code importPath} (relative to {@code jahiaImportsDiskPath})
+     * must contain {@code export.properties}, {@code roles/}, {@code users/}, and a
+     * sub-directory named after {@code siteKey}.
+     *
+     * @param importPath path relative to {@code jahiaImportsDiskPath}
+     * @param siteKey    target site key; also used as a directory name under importPath
+     * @return {@code true} on success; {@code false} on error or invalid path
+     */
     @GraphQLField
     @GraphQLDescription("Import a website")
     @GraphQLRequiresPermission("websitesAdmin")
+    // Fix F: removed dead `throws IOException` — the IOException is caught internally
     public static Boolean importWebsite(@GraphQLName("importPath") @GraphQLDescription("Import path") String importPath,
-                                        @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) throws IOException {
+                                        @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) {
         LOGGER.info("Processing Import");
         Boolean successful = Boolean.TRUE;
         final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath()).toAbsolutePath().normalize();
@@ -249,8 +323,11 @@ public class WebsitesMutation {
                 if (infos.isSelected()) {
                     String type = infos.getType();
                     if (type.equals(FILES)) {
-                        anythingImported = true;
-                        importFiles(importExportBaseService, jahiaSitesService, importsInfos, infos);
+                        // Fix H: only mark imported when importFiles reports success
+                        boolean fileImported = importFiles(importExportBaseService, jahiaSitesService, importsInfos, infos);
+                        if (fileImported) {
+                            anythingImported = true;
+                        }
                     } else if (type.equals(SITE)) {
                         // site import
                         anythingImported = true;
@@ -285,44 +362,72 @@ public class WebsitesMutation {
         }
     }
 
-    private static void importFiles(ImportExportBaseService importExportBaseService, JahiaSitesService jahiaSitesService, List<ImportInfo> importsInfos, ImportInfo infos) {
+    /**
+     * Imports files (roles zip) for the given {@link ImportInfo} entry.
+     *
+     * <p>Fix B: the nested {@code try} block that was previously inlined inside
+     * {@link #importWebsite} has been extracted here to resolve SonarQube S1141.
+     *
+     * <p>Fix H: returns {@code true} when the import completed without error so the
+     * caller only counts a genuinely successful import.
+     *
+     * @return {@code true} if the import succeeded; {@code false} on any error
+     */
+    private static boolean importFiles(ImportExportBaseService importExportBaseService, JahiaSitesService jahiaSitesService, List<ImportInfo> importsInfos, ImportInfo infos) {
         try {
-            final File file = ImportUpdateService.getInstance().updateImport( // NOSONAR java:S5738
-                    infos.getImportFile(),
-                    infos.getImportFileName(),
-                    infos.getType(),
-                    new Version(infos.getOriginatingJahiaRelease()));
-            final JahiaSite system = jahiaSitesService.getSiteByKey(JahiaSitesService.SYSTEM_SITE_KEY);
-            if (system == null) {
-                LOGGER.error("Cannot import files: system site '{}' not found", JahiaSitesService.SYSTEM_SITE_KEY);
-                return;
-            }
-
-            final Map<String, String> pathMapping = JCRSessionFactory.getInstance()
-                    .getCurrentUserSession().getPathMapping();
-            pathMapping.put(SHARED_FILES, SITES_PATH_PREFIX + system.getSiteKey() + "/files/");
-            pathMapping.put(SHARED_MASHUPS, SITES_PATH_PREFIX + system.getSiteKey() + "/portlets/");
-            importsInfos.stream().filter(infos2 -> (infos2.getOldSiteKey() != null && infos2.getSiteKey() != null && !infos2.getOldSiteKey().equals(infos2.getSiteKey()))).forEachOrdered((ImportInfo infos2)
-                    -> pathMapping.put(SITES_PATH_PREFIX + infos2.getOldSiteKey(), SITES_PATH_PREFIX + infos2.getSiteKey())
-            );
-
-            JCRTemplate.getInstance().doExecuteWithSystemSession((JCRSessionWrapper session) -> {
-                try {
-                    session.getPathMapping().putAll(pathMapping);
-                    importExportBaseService.importSiteZip(file == null ? null : new FileSystemResource(file),
-                            system,
-                            infos.asMap(),
-                            null,
-                            null,
-                            session);
-                } catch (IOException | RepositoryException ex) {
-                    LOGGER.error(ERR_MSG_ERR_WHEN_GETTING_TPL, ex);
-                }
-                return null;
-            });
+            return doImportFiles(importExportBaseService, jahiaSitesService, importsInfos, infos);
         } catch (NumberFormatException | RepositoryException | JahiaException ex) {
             LOGGER.error(ERR_MSG_ERR_WHEN_GETTING_TPL, ex);
+            return false;
         }
+    }
+
+    /**
+     * Inner helper extracted to resolve SonarQube S1141 (nested try).
+     *
+     * @return {@code true} if the import completed without error
+     * @throws RepositoryException propagated from {@link ImportUpdateService} or the JCR call
+     * @throws JahiaException      propagated from site lookup
+     */
+    private static boolean doImportFiles(ImportExportBaseService importExportBaseService, JahiaSitesService jahiaSitesService, List<ImportInfo> importsInfos, ImportInfo infos) throws RepositoryException, JahiaException {
+        final File file = ImportUpdateService.getInstance().updateImport( // NOSONAR java:S5738
+                infos.getImportFile(),
+                infos.getImportFileName(),
+                infos.getType(),
+                new Version(infos.getOriginatingJahiaRelease()));
+        final JahiaSite system = jahiaSitesService.getSiteByKey(JahiaSitesService.SYSTEM_SITE_KEY);
+        if (system == null) {
+            LOGGER.error("Cannot import files: system site '{}' not found", JahiaSitesService.SYSTEM_SITE_KEY);
+            return false;
+        }
+
+        final Map<String, String> pathMapping = JCRSessionFactory.getInstance()
+                .getCurrentUserSession().getPathMapping();
+        pathMapping.put(SHARED_FILES, SITES_PATH_PREFIX + system.getSiteKey() + "/files/");
+        pathMapping.put(SHARED_MASHUPS, SITES_PATH_PREFIX + system.getSiteKey() + "/portlets/");
+        importsInfos.stream()
+                .filter(infos2 -> (infos2.getOldSiteKey() != null && infos2.getSiteKey() != null && !infos2.getOldSiteKey().equals(infos2.getSiteKey())))
+                .forEachOrdered((ImportInfo infos2)
+                        -> pathMapping.put(SITES_PATH_PREFIX + infos2.getOldSiteKey(), SITES_PATH_PREFIX + infos2.getSiteKey())
+                );
+
+        final boolean[] success = {false};
+        JCRTemplate.getInstance().doExecuteWithSystemSession((JCRSessionWrapper session) -> {
+            try {
+                session.getPathMapping().putAll(pathMapping);
+                importExportBaseService.importSiteZip(file == null ? null : new FileSystemResource(file),
+                        system,
+                        infos.asMap(),
+                        null,
+                        null,
+                        session);
+                success[0] = true;
+            } catch (IOException | RepositoryException ex) {
+                LOGGER.error(ERR_MSG_ERR_WHEN_GETTING_TPL, ex);
+            }
+            return null;
+        });
+        return success[0];
     }
 
     private static boolean importSite(JahiaSitesService jahiaSitesService, ImportInfo infos, String absoluteImportPath) {
@@ -362,22 +467,45 @@ public class WebsitesMutation {
                 }
                 return null;
             });
-
-        } catch (Exception e) {
-            LOGGER.error("Cannot create site " + infos.getSiteTitle(), e);
+        // Only the checked exceptions actually thrown are caught here, so unchecked
+        // RuntimeException and Error propagate instead of being silently swallowed.
+        } catch (IOException | RepositoryException e) {
+            LOGGER.error("Cannot create site '{}'", infos.getSiteTitle(), e);
             successful = Boolean.FALSE;
         }
         return successful;
     }
 
+    /**
+     * Exports all sites in this Jahia instance to a timestamped ZIP and uploads it to the
+     * configured AWS S3 bucket.
+     *
+     * <p><b>Permission:</b> requires {@code websitesAdmin}.
+     *
+     * <p><b>Privilege escalation:</b> the JCR export runs as the root user so that all
+     * content (including content the calling user cannot read) is included.  The original
+     * user is restored in a {@code finally} block.  This mutation therefore exports the
+     * <em>entire Jahia instance</em>.
+     *
+     * <p><b>S3 credentials:</b> configure AWS credentials via the OSGi ConfigurationAdmin
+     * service (PID {@code org.jahia.community.graphql.websites}) or the
+     * {@code src/main/resources/META-INF/configurations/org.jahia.community.graphql.websites.cfg}
+     * file — <em>never</em> pass credentials inline in the GraphQL mutation.
+     *
+     * @return {@link ExportAllSitesResults#SUCCESS} on success,
+     *         {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED} if the S3 bucket
+     *         is not configured, or throws {@link DataFetchingException} on unexpected error
+     */
     @GraphQLField
     @GraphQLDescription("Export All Sites towards the configured S3 bucket")
     @GraphQLRequiresPermission("websitesAdmin")
     public static ExportAllSitesResults exportAllSites() {
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
         SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
-        final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath() + File.separator + "exports" + File.separator +
-                "export-" + DateTimeFormatter.ofPattern("yyyyMMddHHmm").format(LocalDateTime.now(ZoneOffset.UTC)) + ".zip");
+        // Fix I: build path with Paths.get + normalize instead of String concatenation with File.separator
+        final String ts = DateTimeFormatter.ofPattern("yyyyMMddHHmm").format(LocalDateTime.now(ZoneOffset.UTC));
+        final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports", "export-" + ts + ".zip")
+                .toAbsolutePath().normalize();
         try {
             exportAllSites(exportFile);
 
