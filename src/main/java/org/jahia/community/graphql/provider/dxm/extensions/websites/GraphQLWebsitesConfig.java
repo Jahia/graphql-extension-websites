@@ -49,7 +49,10 @@ public class GraphQLWebsitesConfig implements ManagedService {
         static final ConfigSnapshot EMPTY = new ConfigSnapshot(null, null, null, null);
     }
 
-    // Single volatile reference; replaced atomically on each updated() call.
+    // Single volatile reference to an IMMUTABLE snapshot, replaced atomically on each
+    // updated() call. Safe publication via a volatile reference to an immutable object is
+    // the correct idiom, so S3077 ("volatile is not enough") is a false positive here.
+    @SuppressWarnings("java:S3077")
     private volatile ConfigSnapshot snapshot = ConfigSnapshot.EMPTY;
 
     @Override

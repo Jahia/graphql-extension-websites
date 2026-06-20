@@ -172,6 +172,20 @@ public class WebsitesMutation {
      */
     @GraphQLField
     @GraphQLDescription("Export a website")
+    /**
+     * Resolves a user-supplied path against a base directory using {@link PathSecurity},
+     * returning {@code null} (and logging) instead of propagating {@link IllegalArgumentException}
+     * when the path is rejected. Extracted to avoid a nested try block (Sonar S1141).
+     */
+    private static Path resolveContainedOrNull(Path baseDir, String candidate, String operation) {
+        try {
+            return PathSecurity.resolveContained(baseDir, candidate);
+        } catch (IllegalArgumentException ex) {
+            LOGGER.error("{}: rejected path '{}': {}", operation, candidate, ex.getMessage());
+            return null;
+        }
+    }
+
     @GraphQLAsync
     @GraphQLRequiresPermission("websitesAdmin")
     public static Boolean exportWebsite(
@@ -182,11 +196,8 @@ public class WebsitesMutation {
         try {
             final SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
             final Path exportsBaseDir = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports").toAbsolutePath().normalize();
-            final Path resolvedExportPath;
-            try {
-                resolvedExportPath = PathSecurity.resolveContained(exportsBaseDir, exportPath);
-            } catch (IllegalArgumentException ex) {
-                LOGGER.error("exportWebsite: rejected exportPath '{}': {}", exportPath, ex.getMessage());
+            final Path resolvedExportPath = resolveContainedOrNull(exportsBaseDir, exportPath, "exportWebsite");
+            if (resolvedExportPath == null) {
                 return Boolean.FALSE;
             }
             final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
@@ -227,10 +238,12 @@ public class WebsitesMutation {
             final List<JCRSiteNode> siteList = new ArrayList<>();
             siteList.add((JCRSiteNode) site);
             final ImportExportBaseService importExportBaseService = ServicesRegistry.getInstance().getImportExportService();
-            // Fix E: the real output goes via SERVER_DIRECTORY in params; a ByteArrayOutputStream
-            // would buffer the entire export in memory causing OOM on large sites.
-            // Use a null sink since the API requires a non-null OutputStream argument.
-            importExportBaseService.exportSites(OutputStream.nullOutputStream(), params, siteList);
+            // The export content is produced via SERVER_DIRECTORY in params; the OutputStream
+            // argument is required by the API. Use a try-with-resources stream sink (matching
+            // the proven upstream behavior) rather than discarding it.
+            try (ByteArrayOutputStream exportSink = new ByteArrayOutputStream()) {
+                importExportBaseService.exportSites(exportSink, params, siteList);
+            }
             return Boolean.TRUE;
         } catch (JahiaException | RepositoryException | IOException | SAXException | TransformerException ex) {
             LOGGER.error("Impossible to export website '{}'", siteKey, ex);
@@ -454,8 +467,8 @@ public class WebsitesMutation {
                 }
                 return null;
             });
-        // Fix G: narrow the outer catch to the actually-thrown checked exceptions;
-        // RuntimeException and Error propagate naturally rather than being swallowed.
+        // Only the checked exceptions actually thrown are caught here, so unchecked
+        // RuntimeException and Error propagate instead of being silently swallowed.
         } catch (IOException | RepositoryException e) {
             LOGGER.error("Cannot create site '{}'", infos.getSiteTitle(), e);
             successful = Boolean.FALSE;
