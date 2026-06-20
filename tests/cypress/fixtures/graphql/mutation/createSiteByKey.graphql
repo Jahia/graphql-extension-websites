@@ -7,13 +7,15 @@ mutation CreateSiteByKey(
 ) {
     admin {
         jahia {
-            createSiteByKey(
-                siteKey: $siteKey
-                serverName: $serverName
-                title: $title
-                templateSet: $templateSet
-                locale: $locale
-            )
+            websites {
+                createSiteByKey(
+                    siteKey: $siteKey
+                    serverName: $serverName
+                    title: $title
+                    templateSet: $templateSet
+                    locale: $locale
+                )
+            }
         }
     }
 }

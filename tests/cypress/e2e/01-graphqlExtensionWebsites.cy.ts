@@ -27,7 +27,7 @@ describe('GraphQL Extension Websites', () => {
                 locale: 'en'
             }
         })
-            .its('data.admin.jahia.createSiteByKey')
+            .its('data.admin.jahia.websites.createSiteByKey')
             .should('eq', true);
 
         // Cleanup
@@ -51,7 +51,7 @@ describe('GraphQL Extension Websites', () => {
             mutation: deleteSiteByKey,
             variables: {siteKey: TEST_SITE_KEY}
         })
-            .its('data.admin.jahia.deleteSiteByKey')
+            .its('data.admin.jahia.websites.deleteSiteByKey')
             .should('eq', true);
     });
 
@@ -60,7 +60,7 @@ describe('GraphQL Extension Websites', () => {
             mutation: deleteSiteByKey,
             variables: {siteKey: 'non-existent-cypress-site-12345'}
         })
-            .its('data.admin.jahia.deleteSiteByKey')
+            .its('data.admin.jahia.websites.deleteSiteByKey')
             .should('eq', false);
     });
 
@@ -73,13 +73,13 @@ describe('GraphQL Extension Websites', () => {
                 onlyStaging: false
             }
         })
-            .its('data.admin.jahia.exportWebsite')
+            .its('data.admin.jahia.websites.exportWebsite')
             .should('eq', true);
     });
 
     it('returns AWS_S3_BUCKET_NOT_CONFIGURED when exportAllSites is called without AWS configuration', () => {
         cy.apollo({mutation: exportAllSites})
-            .its('data.admin.jahia.exportAllSites')
+            .its('data.admin.jahia.websites.exportAllSites')
             .should('eq', 'AWS_S3_BUCKET_NOT_CONFIGURED');
     });
 });

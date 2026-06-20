@@ -1,7 +1,9 @@
 mutation DeleteSiteByKey($siteKey: String!) {
     admin {
         jahia {
-            deleteSiteByKey(siteKey: $siteKey)
+            websites {
+                deleteSiteByKey(siteKey: $siteKey)
+            }
         }
     }
 }
