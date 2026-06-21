@@ -73,7 +73,7 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
         it('allows the gated mutation for a user granted only the module permission', () => {
             exportAllSitesAs(ALLOWED_USER).then((result: never) => {
                 expect(errorsOf(result), 'should have no errors').to.have.length(0);
-                expect((result as {data: {admin: {jahia: {exportAllSites: string}}}}).data.admin.jahia.exportAllSites)
+                expect((result as {data: {admin: {jahia: {websites: {exportAllSites: string}}}}}).data.admin.jahia.websites.exportAllSites)
                     .to.eq('AWS_S3_BUCKET_NOT_CONFIGURED');
             });
         });

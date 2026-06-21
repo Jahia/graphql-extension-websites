@@ -1,7 +1,9 @@
 mutation ExportAllSites {
     admin {
         jahia {
-            exportAllSites
+            websites {
+                exportAllSites
+            }
         }
     }
 }
