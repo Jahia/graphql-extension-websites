@@ -6,7 +6,6 @@ import graphql.annotations.annotationTypes.GraphQLName;
 import org.apache.commons.collections.ExtendedProperties;
 import org.apache.commons.io.FileUtils;
 import org.jahia.api.settings.SettingsBean;
-import org.jahia.api.usermanager.JahiaUserManagerService;
 import org.jahia.bin.listeners.JahiaContextLoaderListener;
 import org.jahia.commons.Version;
 import org.jahia.exceptions.JahiaException;
@@ -28,7 +27,6 @@ import org.jahia.services.search.spell.CompositeSpellChecker;
 import org.jahia.services.sites.JahiaSite;
 import org.jahia.services.sites.JahiaSitesService;
 import org.jahia.services.sites.SiteCreationInfo;
-import org.jahia.services.usermanager.JahiaUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.FileSystemResource;
@@ -268,6 +266,12 @@ public class WebsitesAdminMutation {
     public Boolean importWebsite(@GraphQLName("importPath") @GraphQLDescription("Import path") String importPath,
                                         @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey) {
         LOGGER.info("Processing Import");
+        // SEC-136: importWebsite imports arbitrary users AND roles (a privilege-escalation vector), so require
+        // full server-administrator rights, not merely the delegated `websitesAdmin` permission.
+        if (!callerIsServerAdministrator()) {
+            LOGGER.error("importWebsite denied: requires full administrator privileges (it imports users and roles)");
+            return Boolean.FALSE;
+        }
         Boolean successful = Boolean.TRUE;
         final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath()).toAbsolutePath().normalize();
         final Path absoluteImportPath;
@@ -522,6 +526,16 @@ public class WebsitesAdminMutation {
         return ExportAllSitesResults.SUCCESS;
     }
 
+    /** True only when the current caller holds the full-administrator permission at the repository root. */
+    private static boolean callerIsServerAdministrator() {
+        try {
+            return JCRSessionFactory.getInstance().getCurrentUserSession().getNode("/").hasPermission("admin");
+        } catch (RepositoryException e) {
+            LOGGER.error("Unable to verify administrator permission", e);
+            return false;
+        }
+    }
+
     private static void exportAllSites(Path exportFile) throws IOException, RepositoryException, JahiaException, SAXException, TransformerException {
         LOGGER.info("<<< Export all sites job");
         Map<String, Object> params = new HashMap<>();
@@ -540,13 +554,12 @@ public class WebsitesAdminMutation {
         params.put(ImportExportService.INCLUDE_ROLES, true);
         params.put(ImportExportService.XSL_PATH, JahiaContextLoaderListener.getServletContext().getRealPath("/WEB-INF/etc/repository/export/cleanup.xsl"));
 
-        JCRSessionFactory jcrSessionFactory = BundleUtils.getOsgiService(JCRSessionFactory.class, null);
-        JahiaUser currentUser = jcrSessionFactory.getCurrentUser();
+        // SEC-136: export as the CURRENT caller — do NOT switch the session user to root. Previously this
+        // elevated to root and dumped getSitesNodeList() (every site's content, users and roles), so a holder
+        // of the delegated `websitesAdmin` role could exfiltrate the entire instance including content they
+        // cannot normally read. Running under the caller's own session confines the archive to authorized content.
         try (FileOutputStream fos = new FileOutputStream(exportFile.toFile())) {
-            jcrSessionFactory.setCurrentUser(BundleUtils.getOsgiService(JahiaUserManagerService.class, null).lookupRootUser().getJahiaUser());
             ((ImportExportBaseService) SpringContextSingleton.getBean("ImportExportService")).exportSites(new BufferedOutputStream(fos), params, JahiaSitesService.getInstance().getSitesNodeList());
-        } finally {
-            jcrSessionFactory.setCurrentUser(currentUser);
         }
         LOGGER.info(">>> END Export all sites job");
     }
