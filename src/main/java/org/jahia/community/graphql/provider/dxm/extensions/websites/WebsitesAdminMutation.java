@@ -181,6 +181,57 @@ public class WebsitesAdminMutation {
         }
     }
 
+    /**
+     * Builds the export parameter map for a single-site export ({@link #exportWebsite}).
+     *
+     * <p>Extracted (behaviour-preserving) so the exposure-relevant flags can be unit-tested
+     * without a Jahia container. Note this "single-site" export intentionally includes
+     * {@code INCLUDE_USERS}, {@code INCLUDE_ROLES} and {@code VIEW_ACL} — bounded by the
+     * caller's own read rights (no escalation), see D6.
+     */
+    static Map<String, Object> buildSingleSiteExportParams(String serverDirectory, String cleanupXslPath, boolean onlyStaging) {
+        final Map<String, Object> params = new HashMap<>(6);
+        params.put(ImportExportService.VIEW_CONTENT, true);
+        params.put(ImportExportService.VIEW_VERSION, false);
+        params.put(ImportExportService.VIEW_ACL, true);
+        params.put(ImportExportService.VIEW_METADATA, true);
+        params.put(ImportExportService.VIEW_JAHIALINKS, true);
+        params.put(ImportExportService.VIEW_WORKFLOW, true);
+        params.put(ImportExportService.SERVER_DIRECTORY, serverDirectory);
+        params.put(ImportExportService.INCLUDE_ALL_FILES, true);
+        params.put(ImportExportService.INCLUDE_TEMPLATES, true);
+        params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
+        params.put(ImportExportService.INCLUDE_DEFINITIONS, true);
+        params.put(ImportExportService.INCLUDE_LIVE_EXPORT, !onlyStaging);
+        params.put(ImportExportService.INCLUDE_USERS, true);
+        params.put(ImportExportService.INCLUDE_ROLES, true);
+        params.put(ImportExportService.XSL_PATH, cleanupXslPath);
+        return params;
+    }
+
+    /**
+     * Builds the export parameter map for the bulk all-sites export ({@link #exportAllSites(Path)}).
+     * Extracted (behaviour-preserving) for unit testing without a Jahia container.
+     */
+    static Map<String, Object> buildAllSitesExportParams(String cleanupXslPath) {
+        Map<String, Object> params = new HashMap<>();
+        params.put(ImportExportService.VIEW_CONTENT, true);
+        params.put(ImportExportService.VIEW_VERSION, false);
+        params.put(ImportExportService.VIEW_ACL, true);
+        params.put(ImportExportService.VIEW_METADATA, true);
+        params.put(ImportExportService.VIEW_JAHIALINKS, true);
+        params.put(ImportExportService.VIEW_WORKFLOW, true);
+        params.put(ImportExportService.INCLUDE_ALL_FILES, true);
+        params.put(ImportExportService.INCLUDE_TEMPLATES, true);
+        params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
+        params.put(ImportExportService.INCLUDE_DEFINITIONS, true);
+        params.put(ImportExportService.INCLUDE_LIVE_EXPORT, true);
+        params.put(ImportExportService.INCLUDE_USERS, true);
+        params.put(ImportExportService.INCLUDE_ROLES, true);
+        params.put(ImportExportService.XSL_PATH, cleanupXslPath);
+        return params;
+    }
+
     @GraphQLField
     @GraphQLDescription("Export a website")
     @GraphQLAsync
@@ -214,23 +265,8 @@ public class WebsitesAdminMutation {
             // non-existent). Remove any previous export at this path so repeated exports
             // to the same exportPath are idempotent instead of failing with a 403.
             FileUtils.deleteQuietly(resolvedExportPath.toFile());
-            final Map<String, Object> params = new HashMap<>(6);
-            params.put(ImportExportService.VIEW_CONTENT, true);
-            params.put(ImportExportService.VIEW_VERSION, false);
-            params.put(ImportExportService.VIEW_ACL, true);
-            params.put(ImportExportService.VIEW_METADATA, true);
-            params.put(ImportExportService.VIEW_JAHIALINKS, true);
-            params.put(ImportExportService.VIEW_WORKFLOW, true);
-            params.put(ImportExportService.SERVER_DIRECTORY, resolvedExportPath.toString());
-            params.put(ImportExportService.INCLUDE_ALL_FILES, true);
-            params.put(ImportExportService.INCLUDE_TEMPLATES, true);
-            params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
-            params.put(ImportExportService.INCLUDE_DEFINITIONS, true);
-            params.put(ImportExportService.INCLUDE_LIVE_EXPORT, !onlyStaging);
-            params.put(ImportExportService.INCLUDE_USERS, true);
-            params.put(ImportExportService.INCLUDE_ROLES, true);
             final String cleanupXsl = settingsBean.getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
-            params.put(ImportExportService.XSL_PATH, cleanupXsl);
+            final Map<String, Object> params = buildSingleSiteExportParams(resolvedExportPath.toString(), cleanupXsl, onlyStaging);
 
             final List<JCRSiteNode> siteList = new ArrayList<>();
             siteList.add((JCRSiteNode) site);
@@ -538,21 +574,7 @@ public class WebsitesAdminMutation {
 
     private static void exportAllSites(Path exportFile) throws IOException, RepositoryException, JahiaException, SAXException, TransformerException {
         LOGGER.info("<<< Export all sites job");
-        Map<String, Object> params = new HashMap<>();
-        params.put(ImportExportService.VIEW_CONTENT, true);
-        params.put(ImportExportService.VIEW_VERSION, false);
-        params.put(ImportExportService.VIEW_ACL, true);
-        params.put(ImportExportService.VIEW_METADATA, true);
-        params.put(ImportExportService.VIEW_JAHIALINKS, true);
-        params.put(ImportExportService.VIEW_WORKFLOW, true);
-        params.put(ImportExportService.INCLUDE_ALL_FILES, true);
-        params.put(ImportExportService.INCLUDE_TEMPLATES, true);
-        params.put(ImportExportService.INCLUDE_SITE_INFOS, true);
-        params.put(ImportExportService.INCLUDE_DEFINITIONS, true);
-        params.put(ImportExportService.INCLUDE_LIVE_EXPORT, true);
-        params.put(ImportExportService.INCLUDE_USERS, true);
-        params.put(ImportExportService.INCLUDE_ROLES, true);
-        params.put(ImportExportService.XSL_PATH, JahiaContextLoaderListener.getServletContext().getRealPath("/WEB-INF/etc/repository/export/cleanup.xsl"));
+        Map<String, Object> params = buildAllSitesExportParams(JahiaContextLoaderListener.getServletContext().getRealPath("/WEB-INF/etc/repository/export/cleanup.xsl"));
 
         // SEC-136: export as the CURRENT caller — do NOT switch the session user to root. Previously this
         // elevated to root and dumped getSitesNodeList() (every site's content, users and roles), so a holder
