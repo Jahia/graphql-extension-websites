@@ -59,11 +59,11 @@ import java.util.*;
  * must hold that permission; unauthenticated or insufficiently privileged requests are
  * rejected by the GraphQL security layer before the method body executes.
  *
- * <p><b>Privilege-scope caveat for {@link #exportAllSites()}:</b> that mutation
- * temporarily switches the active JCR session to the root user so that all content
- * (including content the calling user cannot normally read) is included in the export.
- * It exports the entire Jahia instance.  Callers granted {@code websitesAdmin} should
- * understand this elevation.  See the README for configuration details.
+ * <p><b>Privilege scope of {@link #exportAllSites()} (SEC-136):</b> that mutation runs
+ * the JCR export under the <em>caller's own</em> session — it does <b>not</b> escalate to
+ * the root user. The archive is therefore confined to the content the caller is authorized
+ * to read; a {@code websitesAdmin} holder cannot use it to exfiltrate content they cannot
+ * otherwise access. See the README for S3 configuration details.
  */
 @GraphQLName("WebsitesAdminMutation")
 @GraphQLDescription("Website lifecycle administrative mutations")
@@ -521,10 +521,11 @@ public class WebsitesAdminMutation {
      *
      * <p><b>Permission:</b> requires {@code websitesAdmin}.
      *
-     * <p><b>Privilege escalation:</b> the JCR export runs as the root user so that all
-     * content (including content the calling user cannot read) is included.  The original
-     * user is restored in a {@code finally} block.  This mutation therefore exports the
-     * <em>entire Jahia instance</em>.
+     * <p><b>Privilege scope (SEC-136):</b> the JCR export runs under the <em>caller's own</em>
+     * session — it does <b>not</b> switch the session user to root. The resulting archive is
+     * confined to the content the caller is authorized to read (enumerated via
+     * {@link JahiaSitesService#getSitesNodeList()}), so a {@code websitesAdmin} holder cannot
+     * use it to capture content beyond their own read rights.
      *
      * <p><b>S3 credentials:</b> configure AWS credentials via the OSGi ConfigurationAdmin
      * service (PID {@code org.jahia.community.graphql.websites}) or the
@@ -610,7 +611,6 @@ public class WebsitesAdminMutation {
 
     public enum ExportAllSitesResults {
         SUCCESS,
-        FAILURE,
         AWS_S3_BUCKET_NOT_CONFIGURED
     }
 }

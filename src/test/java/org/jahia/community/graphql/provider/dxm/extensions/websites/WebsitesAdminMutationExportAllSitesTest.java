@@ -25,8 +25,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * references NO root-escalation / impersonation API. If any escalation call is reintroduced
  * anywhere in the class, this fails loudly.
  *
- * <p><b>D5 — dead enum value.</b> {@code ExportAllSitesResults.FAILURE} is never returned; the two
- * enum tests document that so its Stage-7 removal is a conscious, tracked change.
+ * <p><b>D5 — dead enum value removed (Stage 7).</b> The unreachable {@code ExportAllSitesResults.FAILURE}
+ * constant was removed; {@code exportAllSites()} only ever returns {@code SUCCESS} or
+ * {@code AWS_S3_BUCKET_NOT_CONFIGURED} (it throws {@link org.jahia.modules.graphql.provider.dxm.DataFetchingException}
+ * on error). {@link #exportAllSitesResults_declaresReachableValuesOnly()} pins that closed set.
  */
 public class WebsitesAdminMutationExportAllSitesTest {
 
@@ -77,19 +79,14 @@ public class WebsitesAdminMutationExportAllSitesTest {
     }
 
     // -------------------------------------------------------------------------
-    // D5 — ExportAllSitesResults.FAILURE is documented but unreachable (dead value).
+    // D5 — the dead ExportAllSitesResults.FAILURE constant was removed in Stage 7.
+    // This pins the enum to exactly the two reachable values the method returns.
     // -------------------------------------------------------------------------
 
     @Test
-    public void exportAllSitesResults_declaresFailure_deadValueDocumented() {
+    public void exportAllSitesResults_declaresReachableValuesOnly() {
         assertThat(WebsitesAdminMutation.ExportAllSitesResults.values())
-                .contains(WebsitesAdminMutation.ExportAllSitesResults.FAILURE);
-    }
-
-    @Test
-    public void exportAllSitesResults_declaresReachableValues() {
-        assertThat(WebsitesAdminMutation.ExportAllSitesResults.values())
-                .contains(WebsitesAdminMutation.ExportAllSitesResults.SUCCESS,
+                .containsExactlyInAnyOrder(WebsitesAdminMutation.ExportAllSitesResults.SUCCESS,
                         WebsitesAdminMutation.ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED);
     }
 }
