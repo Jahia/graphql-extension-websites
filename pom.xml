@@ -99,6 +99,16 @@
             <version>3.27.7</version>
             <scope>test</scope>
         </dependency>
+        <!-- Mockito 5.x (test scope). The inline mock-maker is the default in 5.x, which
+             is required to mockStatic() the Jahia singletons (JCRTemplate, ServicesRegistry,
+             BundleUtils, SpringContextSingleton, JahiaSitesService, JahiaContextLoaderListener)
+             that the mutation code binds to with no DI seam. Mockito 5 coexists with JUnit 4. -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
