@@ -4,7 +4,7 @@ Jahia OSGi module that extends the GraphQL admin API with site lifecycle operati
 
 ## Key Facts
 
-- **artifactId**: `graphql-extension-websites` | **version**: `1.1.1-SNAPSHOT`
+- **artifactId**: `graphql-extension-websites` | **version**: `1.1.2-SNAPSHOT`
 - **Java package**: `org.jahia.community.graphql.provider.dxm.extensions.websites`
 - **jahia-depends**: `default,graphql-dxm-provider`
 - **No frontend**, no admin UI
@@ -15,13 +15,14 @@ Jahia OSGi module that extends the GraphQL admin API with site lifecycle operati
 | Class | Role |
 |-------|------|
 | `DXGraphQLExtensionWebsitesProvider` | Registers mutations with the DXM GraphQL provider |
-| `WebsitesMutation` | `@GraphQLTypeExtension(GqlJahiaAdminMutation.class)` — all site operations |
+| `WebsitesMutation` | `@GraphQLTypeExtension(GqlJahiaAdminMutation.class)` — exposes the `websites` namespace container |
+| `WebsitesAdminMutation` | Holds all site operations (create/delete/export/import/exportAllSites); returned by `WebsitesMutation.websites()` |
 | `GraphQLWebsitesConfig` | `@Component` OSGi service; holds AWS S3 credentials/config |
 | `ImportInfo` | Value object used during import orchestration |
 
 ## GraphQL API
 
-All mutations extend `GqlJahiaAdminMutation` (`admin.jahia.*`). Permission: `admin`.
+All mutations live under the `websites` namespace container on `GqlJahiaAdminMutation`, i.e. the GraphQL path is `admin.jahia.websites.<operation>` (a flat `admin.jahia.<operation>` path does NOT resolve). Permission: `websitesAdmin` on every mutation via `@GraphQLRequiresPermission("websitesAdmin")`. `importWebsite` additionally requires full server-administrator rights (`admin` at the repository root) because it imports users and roles (SEC-136).
 
 | Mutation | Signature | Notes |
 |----------|-----------|-------|
@@ -31,7 +32,7 @@ All mutations extend `GqlJahiaAdminMutation` (`admin.jahia.*`). Permission: `adm
 | `importWebsite` | `(importPath, siteKey)` → Boolean | Path relative to `jahiaImportsDiskPath`; reads `export.properties` |
 | `exportAllSites` | `()` → `ExportAllSitesResults` | Exports to `jahiaVarDiskPath/exports/export-{timestamp}.zip`, then uploads to S3 |
 
-`ExportAllSitesResults` enum: `SUCCESS`, `FAILURE`, `AWS_S3_BUCKET_NOT_CONFIGURED`.
+`ExportAllSitesResults` enum: `SUCCESS`, `AWS_S3_BUCKET_NOT_CONFIGURED`. (`exportAllSites` throws `DataFetchingException` on unexpected error rather than returning a failure value.)
 
 ## S3 Upload Configuration
 
@@ -63,6 +64,6 @@ yarn install
 ## Gotchas
 
 - `exportWebsite` is `@GraphQLAsync` — the GraphQL response returns before the export completes; clients cannot poll for completion via this mutation
-- `exportAllSites` temporarily switches the JCR session user to root for the export, then restores the original user in `finally`
+- `exportAllSites` runs the export under the **caller's own** JCR session (SEC-136) — it does NOT escalate to root. The archive is confined to content the caller is authorized to read, so a `websitesAdmin` holder cannot exfiltrate content beyond their own rights
 - `importWebsite` expects a specific directory layout under `jahiaImportsDiskPath`: `{importPath}/export.properties`, `{importPath}/roles/`, `{importPath}/users/`, `{importPath}/{siteKey}/`
 - Creating a site requires a valid template set; if the template set is not installed, `addSite` throws a `JahiaException` and the mutation returns `false`

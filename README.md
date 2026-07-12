@@ -8,9 +8,11 @@ The purpose of this module is to allow the creation, deletion, import and export
 hold this permission will have their request rejected by the GraphQL security layer before
 any operation is attempted.
 
-Note that `exportAllSites` temporarily escalates the JCR session to the root user so that
-the full instance content (all sites, roles, users) is exported, regardless of what the
-calling user can normally read.  Grant `websitesAdmin` only to fully trusted administrators.
+Note that `exportAllSites` runs the export under the **calling user's own** JCR session
+(SEC-136) — it does **not** escalate to root.  The resulting archive is confined to the
+content the caller is authorized to read, so a `websitesAdmin` holder cannot use it to
+capture content beyond their own read rights.  `importWebsite` additionally requires full
+server-administrator rights (it imports users and roles), not merely `websitesAdmin`.
 
 ## Installation
 
@@ -52,13 +54,15 @@ a deployed `karaf/etc` file that was already customised (the file starts with
 mutation {
     admin {
         jahia {
-            createSiteByKey(
-                siteKey: "SITE_KEY"
-                serverName: "SERVER_NAME"
-                title: "SITE_TITLE"
-                templateSet: "TEMPLATE_SET"
-                locale: "LOCALE"
-            )
+            websites {
+                createSiteByKey(
+                    siteKey: "SITE_KEY"
+                    serverName: "SERVER_NAME"
+                    title: "SITE_TITLE"
+                    templateSet: "TEMPLATE_SET"
+                    locale: "LOCALE"
+                )
+            }
         }
     }
 }
@@ -68,7 +72,9 @@ mutation {
 mutation {
     admin {
         jahia {
-            deleteSiteByKey(siteKey: "SITE_KEY")
+            websites {
+                deleteSiteByKey(siteKey: "SITE_KEY")
+            }
         }
     }
 }
@@ -78,10 +84,12 @@ mutation {
 mutation {
     admin {
         jahia {
-            importWebsite(
-                importPath: "RELATIVE_IMPORT_PATH",
-                siteKey: "SITE_KEY"
-            )
+            websites {
+                importWebsite(
+                    importPath: "RELATIVE_IMPORT_PATH",
+                    siteKey: "SITE_KEY"
+                )
+            }
         }
     }
 }
@@ -91,11 +99,13 @@ mutation {
 mutation {
     admin {
         jahia {
-            exportWebsite(
-                siteKey: "SITE_KEY",
-                exportPath: "RELATIVE_EXPORT_PATH",
-                onlyStaging: true
-            )
+            websites {
+                exportWebsite(
+                    siteKey: "SITE_KEY",
+                    exportPath: "RELATIVE_EXPORT_PATH",
+                    onlyStaging: true
+                )
+            }
         }
     }
 }
@@ -110,7 +120,9 @@ then trigger the export:
 mutation {
     admin {
         jahia {
-            exportAllSites
+            websites {
+                exportAllSites
+            }
         }
     }
 }
@@ -119,7 +131,9 @@ mutation {
 Possible return values:
 - `SUCCESS` — export and S3 upload completed; the local ZIP was removed.
 - `AWS_S3_BUCKET_NOT_CONFIGURED` — one or more S3 config values are blank; no upload attempted.
-- `FAILURE` — unexpected error (check the Jahia server logs).
+
+On an unexpected error the mutation raises a GraphQL error (`DataFetchingException`) rather
+than returning an enum value — check the Jahia server logs.
 
 > **Security note:** do **not** set credentials inline via the `configuration(...)` mutation
 > as shown in older documentation.  That approach leaks secrets into GraphQL access logs and
@@ -131,5 +145,7 @@ Possible return values:
   `ImportExportBaseService`.  This module delegates entirely to that layer; no additional
   ZIP-slip check is performed here.  The mutation is gated by `websitesAdmin`, so only
   trusted administrators can trigger imports.
-- **`exportAllSites` privilege scope**: as noted above, the export runs as root and captures
-  the whole instance.  Re-scoping to a stronger permission than `websitesAdmin` is deferred.
+- **`exportAllSites` privilege scope**: the export runs under the caller's own session
+  (SEC-136) and is confined to content the caller can read, so it is not an instance-wide
+  root dump.  Any further tightening of the required permission beyond `websitesAdmin` is
+  deferred.
