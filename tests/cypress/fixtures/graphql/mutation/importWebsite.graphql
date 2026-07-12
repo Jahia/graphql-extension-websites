@@ -1,0 +1,9 @@
+mutation ImportWebsite($importPath: String!, $siteKey: String!) {
+    admin {
+        jahia {
+            websites {
+                importWebsite(importPath: $importPath, siteKey: $siteKey)
+            }
+        }
+    }
+}
