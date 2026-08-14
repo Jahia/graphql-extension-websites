@@ -130,10 +130,24 @@ mutation {
 
 Possible return values:
 - `SUCCESS` — export and S3 upload completed; the local ZIP was removed.
-- `AWS_S3_BUCKET_NOT_CONFIGURED` — one or more S3 config values are blank; no upload attempted.
+- `AWS_S3_BUCKET_NOT_CONFIGURED` — one or more S3 config values are blank. The S3 configuration
+  is checked **before** exporting, so nothing is exported and no upload is attempted.
 
 On an unexpected error the mutation raises a GraphQL error (`DataFetchingException`) rather
 than returning an enum value — check the Jahia server logs.
+
+### Why two channels
+
+The split is deliberate, and reflects whether you can act on the outcome:
+
+| Outcome | Channel | Rationale |
+|---------|---------|-----------|
+| S3 not configured | enum value | An expected precondition you fix by supplying configuration. There is no diagnostic detail worth propagating. |
+| Anything unexpected (JCR, I/O, XML, AWS transfer) | GraphQL error | The underlying cause must survive so the failure can be diagnosed. Flattening it into an enum constant would discard exactly that. |
+
+So branch on the returned value for configuration problems, and handle GraphQL errors for
+everything else. `ExportAllSitesResults` is an *actionable-outcome* enum, not a general error
+enum — only add a constant for something an operator can remedy.
 
 > **Security note:** do **not** set credentials inline via the `configuration(...)` mutation
 > as shown in older documentation.  That approach leaks secrets into GraphQL access logs and

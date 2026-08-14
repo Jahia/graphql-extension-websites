@@ -32,12 +32,12 @@ All mutations live under the `websites` namespace container on `GqlJahiaAdminMut
 | `importWebsite` | `(importPath, siteKey)` → Boolean | Path relative to `jahiaImportsDiskPath`; reads `export.properties` |
 | `exportAllSites` | `()` → `ExportAllSitesResults` | Exports to `jahiaVarDiskPath/exports/export-{timestamp}.zip`, then uploads to S3 |
 
-`ExportAllSitesResults` enum: `SUCCESS`, `AWS_S3_BUCKET_NOT_CONFIGURED`. (`exportAllSites` throws `DataFetchingException` on unexpected error rather than returning a failure value.)
+`ExportAllSitesResults` enum: `SUCCESS`, `AWS_S3_BUCKET_NOT_CONFIGURED`. `exportAllSites` throws `DataFetchingException` on unexpected error rather than returning a failure value — this two-channel split is **deliberate**: the enum carries expected, operator-actionable outcomes; exceptions carry unexpected failures whose cause must survive for diagnosis. `ExportAllSitesResults` is an actionable-outcome enum, not a general error enum — only add a constant for something an operator can remedy.
 
 ## S3 Upload Configuration
 
 `GraphQLWebsitesConfig` exposes: `awsS3Region`, `awsS3AccessKey`, `awsS3SecretAccessKey`, `awsS3BucketName`.  
-If any field is blank, `exportAllSites` returns `AWS_S3_BUCKET_NOT_CONFIGURED` without uploading.  
+If any field is blank, `exportAllSites` returns `AWS_S3_BUCKET_NOT_CONFIGURED` **before exporting anything** — the precondition is checked first, so an unconfigured instance does no export work at all. (It used to export every site and then delete the archive unread.)  
 The exported ZIP is always deleted from disk after upload (or on failure), via `FileUtils.deleteQuietly`.
 
 ## Build
