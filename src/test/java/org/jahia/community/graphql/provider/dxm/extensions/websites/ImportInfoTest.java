@@ -20,10 +20,27 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>That matters because {@code importWebsite} never calls {@code setSiteProperties(...)} on any
  * of the three {@link ImportInfo} instances it builds — so in production {@code asMap()} always
- * returns an empty map. Whether {@code importSiteZip} needs those keys is a Jahia-behaviour
- * question that cannot be settled without an integration test against a running container, so the
- * behaviour is pinned rather than changed. If it is fixed later,
- * {@link #asMap_isEmptyWhenSitePropertiesAreUnset()} is the test that should fail and be updated.
+ * returns an empty map.
+ *
+ * <p><b>Reachability (traced against Jahia 8.2 sources).</b> The map is only ever handed to
+ * {@code ImportExportBaseService.importSiteZip(file, site, infos, ...)}, which forwards it to
+ * {@code importAdditionalFilesIfPresentInArchiveOrPerformLegacyImportIfNeeded(...)}. That method
+ * reads {@code infos} in exactly one place — inside {@code if (legacyImport)}, calling
+ * {@code performLegacyImport(...)} — and {@code legacyImport} is only true when the archive
+ * contains Jahia 5.x/6.1 descriptors (entries starting with {@code export_}). For a modern 8.x
+ * export, which is the only thing this module's own {@code exportWebsite} produces, the map is
+ * never read. (The {@code infos.get("sitekey")} reads elsewhere in that class belong to
+ * {@code performSiteImport(..., Properties infos)}, a different entry point this module does not
+ * call.) The site itself is unaffected either way: {@code importSite()} builds its
+ * {@code SiteCreationInfo} by reading {@code site.properties} directly, not from {@code asMap()}.
+ *
+ * <p>So the defect is <b>real but currently inert</b>: it would only bite when importing a legacy
+ * 5.x/6.x archive, where {@code performLegacyImport} would receive no site identity. It is
+ * therefore pinned rather than corrected — changing it would alter legacy-import behaviour that no
+ * test in this repository can exercise, for no gain on any supported path. The end-to-end round
+ * trip in {@code 03-graphqlExtensionWebsites-Import.cy.ts} confirms modern imports succeed with
+ * the empty map. If this is ever fixed, {@link #asMap_isEmptyWhenSitePropertiesAreUnset()} is the
+ * test that should fail and be updated.
  */
 public class ImportInfoTest {
 
