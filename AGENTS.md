@@ -61,9 +61,24 @@ yarn install
 - Covers: create site, delete site, export site, `exportAllSites` (expects `AWS_S3_BUCKET_NOT_CONFIGURED` in CI)
 - Site `cypress-test-website` is created and deleted within tests
 
+## Privilege tiers (deliberate, do not "harmonise")
+
+The three mutations use three different privilege scopes. This is by design — the rule is whether the operation *degrades safely* when denied rights:
+
+| Mutation | Runs as | Why |
+|---|---|---|
+| `exportWebsite`, `exportAllSites` | caller | An export degrades gracefully — fewer rights just means a smaller archive, so de-escalating costs nothing (SEC-136) |
+| `createSiteByKey` | **system session** | Load-bearing, **do not remove**. Writing `/sites/<siteKey>` needs rights on `/sites` that a delegated `websitesAdmin` holder lacks; a caller-scoped session would fail for exactly the non-admin users the permission exists to serve. The escalation *is* the delegation mechanism |
+| `importWebsite` | system session **+ second gate** | Imports users and roles, which no de-escalation can bound, so it additionally requires full `admin` at the repository root (SEC-136) |
+
+`createSiteByKey`'s residual risk is bounded: the caller picks `templateSet` and `modulesToDeploy`, so they can enable any **already-installed** module on the new site — but cannot install modules (that needs the module manager) nor affect existing sites.
+
 ## Gotchas
 
 - `exportWebsite` is `@GraphQLAsync` — the GraphQL response returns before the export completes; clients cannot poll for completion via this mutation
 - `exportAllSites` runs the export under the **caller's own** JCR session (SEC-136) — it does NOT escalate to root. The archive is confined to content the caller is authorized to read, so a `websitesAdmin` holder cannot exfiltrate content beyond their own rights
+- `deleteSiteByKey` returns `false` only for **domain** failures (`JahiaException`, site not found). Unchecked exceptions propagate to the GraphQL layer instead of being flattened into `false`, matching how `exportAllSites` raises `DataFetchingException`
+- Bulk export archives are named `export-<yyyyMMddHHmmss>-<8 hex>.zip`. The random suffix is required, not cosmetic: the name doubles as the S3 object key, and the previous minute-granular name let two concurrent exports collide on the same path and key
+- `ImportInfo.asMap()` guards its whole body on `siteProperties != null`, and `importWebsite` never sets that field — so in production it always returns an **empty** map. Pinned by `ImportInfoTest`; see that class before changing it
 - `importWebsite` expects a specific directory layout under `jahiaImportsDiskPath`: `{importPath}/export.properties`, `{importPath}/roles/`, `{importPath}/users/`, `{importPath}/{siteKey}/`
 - Creating a site requires a valid template set; if the template set is not installed, `addSite` throws a `JahiaException` and the mutation returns `false`

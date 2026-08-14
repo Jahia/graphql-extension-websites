@@ -64,6 +64,28 @@ import java.util.*;
  * the root user. The archive is therefore confined to the content the caller is authorized
  * to read; a {@code websitesAdmin} holder cannot use it to exfiltrate content they cannot
  * otherwise access. See the README for S3 configuration details.
+ *
+ * <p><b>Why the privilege scopes differ between mutations.</b> The three tiers below are
+ * deliberate, not an inconsistency — each reflects whether the operation can degrade safely
+ * when it is denied rights:
+ * <ul>
+ *   <li>{@link #exportAllSites()} and {@link #exportWebsite} run <em>as the caller</em>.
+ *       An export degrades gracefully: a session with fewer read rights simply produces a
+ *       smaller archive, so de-escalating bounds the blast radius at no functional cost.</li>
+ *   <li>{@link #createSiteByKey} runs under a <em>system session</em>
+ *       ({@code doExecuteWithSystemSession}). This escalation is load-bearing and must not
+ *       be removed: creating {@code /sites/<siteKey>} requires write rights on {@code /sites}
+ *       that a delegated {@code websitesAdmin} holder does not have. A caller-scoped session
+ *       would make the mutation fail for precisely the non-admin users the {@code websitesAdmin}
+ *       permission exists to serve — the escalation <em>is</em> the delegation mechanism.
+ *       Residual risk is bounded: the caller supplies {@code templateSet} and
+ *       {@code modulesToDeploy}, so they can enable any <em>already-installed</em> module on the
+ *       new site, but cannot install modules (that requires the module manager) nor touch
+ *       existing sites. {@code WebsitesAdminMutationCreateSiteTest} pins this behaviour.</li>
+ *   <li>{@link #importWebsite} needs system rights <em>and</em> imports users and roles, which
+ *       no de-escalation can bound. It therefore carries a second, explicit gate requiring full
+ *       server-administrator rights on top of {@code websitesAdmin} (SEC-136).</li>
+ * </ul>
  */
 @GraphQLName("WebsitesAdminMutation")
 @GraphQLDescription("Website lifecycle administrative mutations")
@@ -80,6 +102,14 @@ public class WebsitesAdminMutation {
     private static final String SITES_PATH_PREFIX = "/sites/"; // NOSONAR java:S1075
     private static final double S3_TARGET_THROUGHPUT_GBPS = 20.0;
     private static final long S3_MINIMUM_PART_SIZE_BYTES = 8L * SizeConstant.MB;
+    /**
+     * Second-granular so the archive name still sorts chronologically; a random suffix is
+     * appended separately because the timestamp alone is not collision-free (see
+     * {@link #buildExportFileName(LocalDateTime)}).
+     */
+    private static final DateTimeFormatter EXPORT_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    /** Hex characters of randomness appended to an export file name to make it unique. */
+    private static final int EXPORT_SUFFIX_LENGTH = 8;
 
     /**
      * Creates a Jahia website with the supplied parameters.
@@ -129,8 +159,16 @@ public class WebsitesAdminMutation {
     /**
      * Deletes the Jahia website identified by {@code siteKey}.
      *
+     * <p>Only {@link JahiaException} — the domain failure {@code removeSite} declares — is
+     * translated to {@code false}. Unchecked exceptions propagate to the GraphQL layer rather
+     * than being reported as an ordinary "deletion failed", matching how
+     * {@link #exportAllSites()} surfaces unexpected errors as {@link DataFetchingException}.
+     * The previous {@code catch (JahiaException | RuntimeException)} conflated the two, so a
+     * bug such as an NPE was indistinguishable from a site that genuinely could not be deleted.
+     *
      * @return {@code true} on success; {@code false} if the site was not found or deletion
      *         fails
+     * @throws RuntimeException if deletion fails unexpectedly (not a domain-level failure)
      */
     @GraphQLField
     @GraphQLDescription("Delete a website")
@@ -149,7 +187,7 @@ public class WebsitesAdminMutation {
             }
             jahiaSitesServices.removeSite(jahiaSite);
             success = Boolean.TRUE;
-        } catch (JahiaException | RuntimeException ex) {
+        } catch (JahiaException ex) {
             LOGGER.error(ERR_MSG_IMP_TO_DELETE_SITE, siteKey, ex);
         }
         return success;
@@ -264,7 +302,7 @@ public class WebsitesAdminMutation {
             // (ImportExportBaseService.isValidServerDirectory requires it to be empty or
             // non-existent). Remove any previous export at this path so repeated exports
             // to the same exportPath are idempotent instead of failing with a 403.
-            FileUtils.deleteQuietly(resolvedExportPath.toFile());
+            deleteExportArtifact(resolvedExportPath, "exportWebsite");
             final String cleanupXsl = settingsBean.getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
             final Map<String, Object> params = buildSingleSiteExportParams(resolvedExportPath.toString(), cleanupXsl, onlyStaging);
 
@@ -543,8 +581,8 @@ public class WebsitesAdminMutation {
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
         SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
         // Fix I: build path with Paths.get + normalize instead of String concatenation with File.separator
-        final String ts = DateTimeFormatter.ofPattern("yyyyMMddHHmm").format(LocalDateTime.now(ZoneOffset.UTC));
-        final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports", "export-" + ts + ".zip")
+        final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports",
+                        buildExportFileName(LocalDateTime.now(ZoneOffset.UTC)))
                 .toAbsolutePath().normalize();
         try {
             exportAllSites(exportFile);
@@ -558,9 +596,48 @@ public class WebsitesAdminMutation {
         } catch (Exception e) {
             throw new DataFetchingException(e);
         } finally {
-            FileUtils.deleteQuietly(exportFile.toFile());
+            deleteExportArtifact(exportFile, "exportAllSites");
         }
         return ExportAllSitesResults.SUCCESS;
+    }
+
+    /**
+     * Builds the file name for a bulk export archive.
+     *
+     * <p>The name doubles as the S3 object key (see {@link #uploadExport}), so it must be
+     * unique per invocation. A timestamp alone is not: the previous {@code yyyyMMddHHmm}
+     * format was minute-granular, so two exports started in the same minute resolved to the
+     * same path — the second overwrote the first's archive mid-upload, and the {@code finally}
+     * block of whichever finished first deleted the file out from under the other. Seconds
+     * narrow the window but do not close it, so a random suffix makes the name collision-free
+     * regardless of timing. The leading timestamp is retained so archives still sort
+     * chronologically in the bucket.
+     *
+     * @param timestamp export start time, expected in UTC
+     * @return a file name of the form {@code export-<yyyyMMddHHmmss>-<8 hex chars>.zip}
+     */
+    static String buildExportFileName(LocalDateTime timestamp) {
+        final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, EXPORT_SUFFIX_LENGTH);
+        return "export-" + EXPORT_TIMESTAMP_FORMAT.format(timestamp) + "-" + suffix + ".zip";
+    }
+
+    /**
+     * Deletes a transient export artifact, logging when a file that exists cannot be removed.
+     *
+     * <p>Replaces a bare {@code FileUtils.deleteQuietly}, which discards the failure entirely
+     * and leaves stale archives accumulating in the exports directory with no trace. Cleanup
+     * failure must not fail the surrounding mutation, so this still swallows the error — it
+     * just stops swallowing it <em>silently</em>. A file that was never created is not a
+     * failure and is not logged.
+     */
+    private static void deleteExportArtifact(Path path, String operation) {
+        final File file = path.toFile();
+        if (!file.exists()) {
+            return;
+        }
+        if (!FileUtils.deleteQuietly(file)) {
+            LOGGER.warn("{}: failed to delete export artifact '{}'; it will remain on disk", operation, path);
+        }
     }
 
     /** True only when the current caller holds the full-administrator permission at the repository root. */
