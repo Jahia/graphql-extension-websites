@@ -97,6 +97,8 @@ public class WebsitesAdminMutation {
     private static final String ERR_MSG_IMP_TO_DELETE_SITE = "Impossible to delete website '{}'";
     private static final String FILES = "files";
     private static final String SITE = "site";
+    /** Descriptor file an import directory must contain; carries the originating Jahia release. */
+    private static final String EXPORT_PROPERTIES = "export.properties";
     private static final String SHARED_FILES = "/shared/files/";
     private static final String SHARED_MASHUPS = "/shared/mashups/";
     private static final String SITES_PATH_PREFIX = "/sites/"; // NOSONAR java:S1075
@@ -346,81 +348,128 @@ public class WebsitesAdminMutation {
             LOGGER.error("importWebsite denied: requires full administrator privileges (it imports users and roles)");
             return Boolean.FALSE;
         }
-        Boolean successful = Boolean.TRUE;
-        final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath()).toAbsolutePath().normalize();
-        final Path absoluteImportPath;
-        try {
-            absoluteImportPath = PathSecurity.resolveContained(importsBaseDir, importPath);
-            // siteKey is untrusted GraphQL input used as a directory name; reject traversal.
-            PathSecurity.resolveContained(absoluteImportPath, siteKey);
-        } catch (IllegalArgumentException ex) {
-            LOGGER.error("importWebsite: rejected import location (importPath '{}', siteKey '{}'): {}", importPath, siteKey, ex.getMessage());
+        final Path absoluteImportPath = resolveImportRoot(importPath, siteKey);
+        if (absoluteImportPath == null) {
             return Boolean.FALSE;
         }
-        try (InputStream input = new FileInputStream(Paths.get(absoluteImportPath.toString(), "export.properties").toString())) {
-            final Properties exportProperties = new Properties();
-            exportProperties.load(input);
-            final List<ImportInfo> importsInfos = new ArrayList<>();
-            ImportInfo importInfo;
 
-            importInfo = new ImportInfo();
-            importInfo.setSiteKey("systemsite");
-            importInfo.setImportFile(Paths.get(absoluteImportPath.toString(), "roles").toFile());
-            importInfo.setImportFileName(ImportExportBaseService.ROLES_ZIP);
-            importInfo.setSelected(true);
-            importInfo.setType(FILES);
-            importInfo.setOriginatingJahiaRelease(exportProperties.getProperty(JAHIA_RELEASE));
-            importsInfos.add(importInfo);
-
-            importInfo = new ImportInfo();
-            importInfo.setSiteKey(null);
-            importInfo.setImportFile(Paths.get(absoluteImportPath.toString(), "users").toFile());
-            importInfo.setImportFileName(ImportExportBaseService.USERS_ZIP);
-            importInfo.setSelected(true);
-            importInfo.setType(FILES);
-            importInfo.setOriginatingJahiaRelease(exportProperties.getProperty(JAHIA_RELEASE));
-            importsInfos.add(importInfo);
-
-            importInfo = new ImportInfo();
-            importInfo.setSiteKey(siteKey);
-            importInfo.setImportFile(Paths.get(absoluteImportPath.toString(), siteKey).toFile());
-            importInfo.setImportFileName(siteKey);
-            importInfo.setSelected(true);
-            importInfo.setType(SITE);
-            importInfo.setOriginatingJahiaRelease(exportProperties.getProperty(JAHIA_RELEASE));
-            importsInfos.add(importInfo);
-            final ImportExportBaseService importExportBaseService = ServicesRegistry.getInstance().getImportExportService();
-            final JahiaSitesService jahiaSitesService = ServicesRegistry.getInstance().getJahiaSitesService();
-
-            importUsers(importExportBaseService, importsInfos);
-
-            boolean anythingImported = false;
-
-            for (final ImportInfo infos : importsInfos) {
-                if (infos.isSelected()) {
-                    String type = infos.getType();
-                    if (type.equals(FILES)) {
-                        // Fix H: only mark imported when importFiles reports success
-                        boolean fileImported = importFiles(importExportBaseService, jahiaSitesService, importsInfos, infos);
-                        if (fileImported) {
-                            anythingImported = true;
-                        }
-                    } else if (type.equals(SITE)) {
-                        // site import
-                        anythingImported = true;
-                        successful = importSite(jahiaSitesService, infos, absoluteImportPath.toString());
-                    }
-                }
-
-                if (anythingImported) {
-                    CompositeSpellChecker.updateSpellCheckerIndex();
-                }
-            }
-        } catch (IOException ex) {
-            LOGGER.error("Impossible to read file export.properties", ex);
-            successful = Boolean.FALSE;
+        final Properties exportProperties = readExportProperties(absoluteImportPath);
+        if (exportProperties == null) {
+            return Boolean.FALSE;
         }
 
+        return runImport(absoluteImportPath, siteKey, exportProperties);
+    }
+
+    /**
+     * Resolves the import directory, rejecting anything that escapes {@code jahiaImportsDiskPath}.
+     *
+     * @return the validated absolute import directory, or {@code null} if either the path or the
+     *         site key was rejected (already logged)
+     */
+    private static Path resolveImportRoot(String importPath, String siteKey) {
+        final Path importsBaseDir = Paths.get(BundleUtils.getOsgiService(SettingsBean.class, null).getJahiaImportsDiskPath())
+                .toAbsolutePath().normalize();
+        try {
+            final Path resolved = PathSecurity.resolveContained(importsBaseDir, importPath);
+            // siteKey is untrusted GraphQL input used as a directory name; reject traversal.
+            PathSecurity.resolveContained(resolved, siteKey);
+            return resolved;
+        } catch (IllegalArgumentException ex) {
+            LOGGER.error("importWebsite: rejected import location (importPath '{}', siteKey '{}'): {}",
+                    importPath, siteKey, ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Reads {@code export.properties} from the import directory.
+     *
+     * @return the loaded properties, or {@code null} if the file could not be read (already logged)
+     */
+    private static Properties readExportProperties(Path absoluteImportPath) {
+        final Path propertiesFile = absoluteImportPath.resolve(EXPORT_PROPERTIES);
+        try (InputStream input = new FileInputStream(propertiesFile.toString())) {
+            final Properties exportProperties = new Properties();
+            exportProperties.load(input);
+            return exportProperties;
+        } catch (IOException ex) {
+            LOGGER.error("Impossible to read file {}", propertiesFile, ex);
+            return null;
+        }
+    }
+
+    /**
+     * Builds the three descriptors {@code importWebsite} feeds to the import services, in the order
+     * they must be processed: roles, then users, then the site itself.
+     *
+     * <p>Package-private so the wiring can be asserted without a Jahia container — this is pure
+     * boilerplate that is easy to get subtly wrong (note the deliberately {@code null} site key on
+     * the users entry, and that the site directory is named after {@code siteKey}).
+     */
+    static List<ImportInfo> buildImportDescriptors(Path absoluteImportPath, String siteKey, Properties exportProperties) {
+        final String jahiaRelease = exportProperties.getProperty(JAHIA_RELEASE);
+        final List<ImportInfo> descriptors = new ArrayList<>(3);
+        descriptors.add(newImportInfo(JahiaSitesService.SYSTEM_SITE_KEY,
+                absoluteImportPath.resolve("roles").toFile(), ImportExportBaseService.ROLES_ZIP, FILES, jahiaRelease));
+        // Users are repository-wide, not site-scoped: the null site key is intentional.
+        descriptors.add(newImportInfo(null,
+                absoluteImportPath.resolve("users").toFile(), ImportExportBaseService.USERS_ZIP, FILES, jahiaRelease));
+        descriptors.add(newImportInfo(siteKey,
+                absoluteImportPath.resolve(siteKey).toFile(), siteKey, SITE, jahiaRelease));
+        return descriptors;
+    }
+
+    private static ImportInfo newImportInfo(String siteKey, File importFile, String importFileName, String type, String jahiaRelease) {
+        final ImportInfo importInfo = new ImportInfo();
+        importInfo.setSiteKey(siteKey);
+        importInfo.setImportFile(importFile);
+        importInfo.setImportFileName(importFileName);
+        importInfo.setSelected(true);
+        importInfo.setType(type);
+        importInfo.setOriginatingJahiaRelease(jahiaRelease);
+        return importInfo;
+    }
+
+    /**
+     * Runs the import described by {@code exportProperties}.
+     *
+     * <p>Only the site import determines the returned value; a failed roles or files import is
+     * logged and counted towards the re-index but does not by itself fail the mutation. That is
+     * pre-existing behaviour, preserved deliberately during the extraction of this method.
+     *
+     * @return {@code true} unless the site import failed
+     */
+    private static Boolean runImport(Path absoluteImportPath, String siteKey, Properties exportProperties) {
+        final List<ImportInfo> importsInfos = buildImportDescriptors(absoluteImportPath, siteKey, exportProperties);
+        final ImportExportBaseService importExportBaseService = ServicesRegistry.getInstance().getImportExportService();
+        final JahiaSitesService jahiaSitesService = ServicesRegistry.getInstance().getJahiaSitesService();
+
+        importUsers(importExportBaseService, importsInfos);
+
+        Boolean successful = Boolean.TRUE;
+        boolean anythingImported = false;
+
+        for (final ImportInfo infos : importsInfos) {
+            if (!infos.isSelected()) {
+                continue;
+            }
+            if (FILES.equals(infos.getType())) {
+                // Fix H: only mark imported when importFiles reports success
+                anythingImported |= importFiles(importExportBaseService, jahiaSitesService, importsInfos, infos);
+            } else if (SITE.equals(infos.getType())) {
+                anythingImported = true;
+                successful = importSite(jahiaSitesService, infos, absoluteImportPath.toString());
+            }
+        }
+
+        // Re-index once, after every descriptor has been processed. This call used to sit inside
+        // the loop, so it re-ran on every remaining iteration once anythingImported flipped true —
+        // rebuilding the index against a half-imported repository and then again at the end.
+        // Doing it once here is both cheaper and a more accurate reflection of the final state.
+        if (anythingImported) {
+            CompositeSpellChecker.updateSpellCheckerIndex();
+        }
         return successful;
     }
 
