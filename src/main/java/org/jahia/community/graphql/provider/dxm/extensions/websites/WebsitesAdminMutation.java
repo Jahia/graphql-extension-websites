@@ -570,15 +570,44 @@ public class WebsitesAdminMutation {
      * {@code src/main/resources/META-INF/configurations/org.jahia.community.graphql.websites.cfg}
      * file — <em>never</em> pass credentials inline in the GraphQL mutation.
      *
-     * @return {@link ExportAllSitesResults#SUCCESS} on success,
-     *         {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED} if the S3 bucket
-     *         is not configured, or throws {@link DataFetchingException} on unexpected error
+     * <p><b>How failures are reported.</b> This mutation deliberately uses two channels, split by
+     * whether the caller can act on the outcome:
+     * <ul>
+     *   <li><b>Typed result</b> — an {@link ExportAllSitesResults} value for an <em>expected,
+     *       actionable</em> outcome. {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED}
+     *       is a precondition the operator fixes by supplying configuration; it is not an
+     *       internal error and carries no diagnostic detail worth propagating.</li>
+     *   <li><b>{@link DataFetchingException}</b> — for anything <em>unexpected</em> (JCR, I/O,
+     *       XML, AWS transfer failures). These are wrapped so the underlying cause reaches the
+     *       GraphQL error extensions and the logs. Flattening them into an enum constant would
+     *       discard exactly the information needed to diagnose them.</li>
+     * </ul>
+     * Callers should therefore branch on the returned value for configuration problems and
+     * handle GraphQL errors for everything else.
+     *
+     * @return {@link ExportAllSitesResults#SUCCESS} on success, or
+     *         {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED} if S3 is not configured
+     * @throws DataFetchingException on any unexpected failure during export or upload
      */
     @GraphQLField
-    @GraphQLDescription("Export All Sites towards the configured S3 bucket")
+    @GraphQLDescription("Export all sites to the configured S3 bucket. Returns AWS_S3_BUCKET_NOT_CONFIGURED "
+            + "(without exporting) when S3 configuration is incomplete; raises a GraphQL error for any "
+            + "unexpected export or upload failure.")
     @GraphQLRequiresPermission("websitesAdmin")
     public ExportAllSitesResults exportAllSites() {
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
+
+        // Check the S3 precondition BEFORE exporting. This used to run after exportAllSites(...),
+        // which meant an unconfigured instance built a full archive of every site — potentially
+        // minutes of CPU and gigabytes of disk — only for the finally block to delete it unread.
+        // Nothing downstream of this point is reachable without configuration, so failing here is
+        // both cheaper and a more honest "precondition".
+        if (!websitesConfig.isConfigured()) {
+            LOGGER.error("exportAllSites: AWS S3 is not configured (PID {}); no export performed",
+                    "org.jahia.community.graphql.websites");
+            return ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED;
+        }
+
         SettingsBean settingsBean = BundleUtils.getOsgiService(SettingsBean.class, null);
         // Fix I: build path with Paths.get + normalize instead of String concatenation with File.separator
         final Path exportFile = Paths.get(settingsBean.getJahiaVarDiskPath(), "exports",
@@ -586,13 +615,7 @@ public class WebsitesAdminMutation {
                 .toAbsolutePath().normalize();
         try {
             exportAllSites(exportFile);
-
-            if (websitesConfig.isConfigured()) {
-                uploadExport(exportFile, websitesConfig);
-            } else {
-                LOGGER.error("AWS S3 bucket is not configured");
-                return ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED;
-            }
+            uploadExport(exportFile, websitesConfig);
         } catch (Exception e) {
             throw new DataFetchingException(e);
         } finally {
@@ -686,8 +709,22 @@ public class WebsitesAdminMutation {
         LOGGER.info(">>> END upload exportFile: {}", exportFile);
     }
 
+    /**
+     * Outcomes of {@link #exportAllSites()} that the caller can act on.
+     *
+     * <p>This is deliberately <em>not</em> a general error enum: unexpected failures are raised as
+     * {@link DataFetchingException} instead, so their cause survives. Only add a constant here for
+     * an outcome an operator can actually remedy — see the {@code exportAllSites()} javadoc for the
+     * reasoning behind the split.
+     */
     public enum ExportAllSitesResults {
+        /** Export and S3 upload both completed; the local archive was removed. */
         SUCCESS,
+        /**
+         * One or more S3 settings are blank, so nothing was uploaded — and, since the check runs
+         * first, nothing was exported either. Remedy by completing the configuration under PID
+         * {@code org.jahia.community.graphql.websites}.
+         */
         AWS_S3_BUCKET_NOT_CONFIGURED
     }
 }
