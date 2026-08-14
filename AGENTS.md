@@ -57,9 +57,15 @@ yarn install
 ./ci.build.sh && ./ci.startup.sh
 ```
 
-- Tests: `tests/cypress/e2e/01-graphqlExtensionWebsites.cy.ts`
+- Specs: `tests/cypress/e2e/01-…` (core mutations), `02-…Permissions` (RBAC + SEC-136 gates), `03-…Import` (import round trip)
 - Covers: create site, delete site, export site, `exportAllSites` (expects `AWS_S3_BUCKET_NOT_CONFIGURED` in CI)
-- Site `cypress-test-website` is created and deleted within tests
+- Sites `cypress-test-website` and `cypress-roundtrip-site` are created and deleted within tests
+
+### Import round trip
+
+`exportWebsite` writes exactly the layout `importWebsite` reads (`export.properties`, `users/`, `roles/`, `<siteKey>/site.properties`), so spec 03 is a real round trip — create → export → stage → delete → import → assert the site is back — rather than a committed fixture that would rot against the exporter.
+
+Cypress runs in its own container and cannot reach Jahia's filesystem, so moving the tree from `{jahiaVarDiskPath}/exports` to `{jahiaImportsDiskPath}` happens **server-side** via `cypress/fixtures/stageImportTree.groovy`, run through the provisioning API with `cy.executeGroovy`. That script also waits out the `@GraphQLAsync` export, which returns before the tree is on disk — do not assume the export exists the moment the mutation resolves.
 
 ## Privilege tiers (deliberate, do not "harmonise")
 
@@ -79,6 +85,6 @@ The three mutations use three different privilege scopes. This is by design — 
 - `exportAllSites` runs the export under the **caller's own** JCR session (SEC-136) — it does NOT escalate to root. The archive is confined to content the caller is authorized to read, so a `websitesAdmin` holder cannot exfiltrate content beyond their own rights
 - `deleteSiteByKey` returns `false` only for **domain** failures (`JahiaException`, site not found). Unchecked exceptions propagate to the GraphQL layer instead of being flattened into `false`, matching how `exportAllSites` raises `DataFetchingException`
 - Bulk export archives are named `export-<yyyyMMddHHmmss>-<8 hex>.zip`. The random suffix is required, not cosmetic: the name doubles as the S3 object key, and the previous minute-granular name let two concurrent exports collide on the same path and key
-- `ImportInfo.asMap()` guards its whole body on `siteProperties != null`, and `importWebsite` never sets that field — so in production it always returns an **empty** map. Pinned by `ImportInfoTest`; see that class before changing it
+- `ImportInfo.asMap()` guards its whole body on `siteProperties != null`, and `importWebsite` never sets that field — so in production it always returns an **empty** map. Traced against Jahia 8.2 sources: `importSiteZip` only reads that map under `if (legacyImport)` (Jahia 5.x/6.1 archives), so it is **inert for modern 8.x imports** and deliberately left alone. Pinned by `ImportInfoTest` — read its javadoc before changing it
 - `importWebsite` expects a specific directory layout under `jahiaImportsDiskPath`: `{importPath}/export.properties`, `{importPath}/roles/`, `{importPath}/users/`, `{importPath}/{siteKey}/`
 - Creating a site requires a valid template set; if the template set is not installed, `addSite` throws a `JahiaException` and the mutation returns `false`
