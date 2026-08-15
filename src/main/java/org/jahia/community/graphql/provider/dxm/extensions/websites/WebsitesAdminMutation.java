@@ -64,18 +64,23 @@ import java.util.*;
  *   <caption>Permission per mutation</caption>
  *   <tr><th>Mutation</th><th>Annotation (checked at {@code /})</th><th>Additional in-body gate</th></tr>
  *   <tr><td>{@link #createSiteByKey}</td><td>{@code websitesCreate}</td><td>—</td></tr>
- *   <tr><td>{@link #exportWebsite}</td><td>{@code websitesExport}</td><td>—</td></tr>
- *   <tr><td>{@link #exportAllSites()}</td><td>{@code websitesExportAll}</td><td>—</td></tr>
+ *   <tr><td>{@link #exportWebsite}</td><td>{@code websitesAdmin}</td><td>{@code websitesExport} <em>on the target site</em></td></tr>
+ *   <tr><td>{@link #exportAllSites()}</td><td>{@code websitesExportAll}</td><td>{@code admin} at the repository root</td></tr>
  *   <tr><td>{@link #deleteSiteByKey}</td><td>{@code websitesAdmin}</td><td>{@code websitesDelete} <em>on the target site</em></td></tr>
  *   <tr><td>{@link #importWebsite}</td><td>{@code websitesAdmin}</td><td>{@code admin} at the repository root</td></tr>
  * </table>
  *
  * <p><b>Why {@code deleteSiteByKey} and {@code importWebsite} keep the coarse
  * {@code websitesAdmin} annotation.</b> Their real authorization lives in the method body, and
- * neither can be expressed at the annotation level.  For deletion in particular the annotation
- * <em>must not</em> be {@code websitesDelete}: that permission is deliberately never granted at
- * the repository root, so annotating it would deny the site-scoped holder before the body could
- * run — breaking exactly the delegation the check exists to enable.
+ * neither can be expressed at the annotation level.  The same applies to {@link #exportWebsite}.
+ *
+ * <p>For the two target-scoped mutations the annotation <em>must not</em> name the fine
+ * permission ({@code websitesDelete} / {@code websitesExport}). Those are deliberately never
+ * granted at the repository root — they live on the site-scoped role — so naming them here would
+ * deny every site administrator before the body could run. Nor can they simply be added to the
+ * root-granted server role to "fix" that: JCR permissions inherit downward, so a root grant would
+ * satisfy the in-body per-site check on <em>every</em> site and make it vacuous. The coarse
+ * annotation plus a fine in-body check is the only combination that works.
  *
  * <p><b>An annotation is a coarse gate, not an authorization model.</b> The provider
  * evaluates it against the <em>repository root</em> ({@code GqlJcrPermissionChecker} resolves
@@ -85,23 +90,32 @@ import java.util.*;
  * that acts on a <em>specific</em> site must therefore carry its own target-scoped check in
  * the method body — {@link #deleteSiteByKey} does, and the absence of one there was SEC-136.
  *
- * <p><b>Privilege scope of {@link #exportAllSites()} (SEC-136):</b> that mutation runs
- * the JCR export under the <em>caller's own</em> session — it does <b>not</b> escalate to
- * the root user, so the archive is bounded by what that session may read. Note what this does
- * and does not promise: it bounds the export by the <em>caller's read rights</em>, which is
- * only a meaningful confinement if those rights are themselves narrow. The
- * {@code graphql-extension-websites-administrator} role shipped by this module grants
- * {@code jcr:read_default} at the repository root, so for a holder of <em>that</em> role the
- * bound is the whole repository. Do not read the de-escalation as a confidentiality guarantee
- * for the shipped role. See the README for S3 configuration details.
+ * <p><b>Privilege scope of the exports (SEC-136).</b> Both export mutations run the JCR export
+ * under the <em>caller's own</em> session — neither escalates to the root user — so an archive is
+ * bounded by what that session may read.
+ *
+ * <p>Be precise about what that bound is worth: it confines the export to the caller's read
+ * rights, which only means something if those rights are themselves narrow. Until §4.3 the
+ * shipped {@code graphql-extension-websites-administrator} role granted
+ * {@code jcr:read_default} at the repository root, so for a holder of that role the "bound" was
+ * the entire repository and the de-escalation bought no confidentiality at all. The role no
+ * longer carries that grant; read is granted per site through the site-scoped role instead.
+ * (The root grant was never needed to reach the API — verified on a live instance, a caller
+ * holding only {@code graphqlAdminMutation} and {@code websitesCreate} can invoke
+ * {@link #createSiteByKey}.)
  *
  * <p><b>Why the privilege scopes differ between mutations.</b> The tiers below are
  * deliberate, not an inconsistency — each reflects whether the operation can degrade safely
  * when it is denied rights:
  * <ul>
- *   <li>{@link #exportAllSites()} and {@link #exportWebsite} run <em>as the caller</em>.
- *       An export degrades gracefully: a session with fewer read rights simply produces a
- *       smaller archive, so de-escalating bounds the blast radius at no functional cost.</li>
+ *   <li>{@link #exportWebsite} runs <em>as the caller</em> and is <em>target-scoped</em>: the
+ *       caller must hold {@code websitesExport} on the site being exported. Relying on the
+ *       session bound alone would make the security property depend on read ACLs lining up, and
+ *       would still write a misleading near-empty archive to disk for an unauthorized caller.</li>
+ *   <li>{@link #exportAllSites()} spans the whole instance, so it is restricted to <em>server
+ *       administrators</em> (§4.3). A read-bounded bulk export would hand a delegated holder an
+ *       archive silently containing only their own sites — a partial backup that looks
+ *       complete, which is worse than a refusal.</li>
  *   <li>{@link #createSiteByKey} runs under a <em>system session</em>
  *       ({@code doExecuteWithSystemSession}). This escalation is load-bearing and must not
  *       be removed: creating {@code /sites/<siteKey>} requires write rights on {@code /sites}
@@ -155,6 +169,12 @@ public class WebsitesAdminMutation {
      * node itself, not the repository root — see {@link #callerMayDeleteSite(JahiaSite)}.
      */
     private static final String WEBSITES_DELETE_PERMISSION = "websitesDelete";
+    /**
+     * Target-scoped permission required to export a single site (SEC-136 §4.3). Like
+     * {@link #WEBSITES_DELETE_PERMISSION} this is checked against the site node itself, so a site
+     * administrator can export the site they administer and nothing else.
+     */
+    private static final String WEBSITES_EXPORT_PERMISSION = "websitesExport";
 
     /**
      * Creates a Jahia website with the supplied parameters.
@@ -244,9 +264,7 @@ public class WebsitesAdminMutation {
                 LOGGER.error("Impossible to delete website '{}': site not found", siteKey);
                 return Boolean.FALSE;
             }
-            if (!callerMayDeleteSite(jahiaSite)) {
-                LOGGER.warn("Refusing to delete website '{}': caller lacks the '{}' permission on that site",
-                        siteKey, WEBSITES_DELETE_PERMISSION);
+            if (!callerMayActOnSite(jahiaSite, WEBSITES_DELETE_PERMISSION, "deleteSiteByKey")) {
                 return Boolean.FALSE;
             }
             jahiaSitesServices.removeSite(jahiaSite);
@@ -258,8 +276,14 @@ public class WebsitesAdminMutation {
     }
 
     /**
-     * Answers whether the current caller may delete {@code site}, by checking the
-     * {@code websitesDelete} permission against the site's own JCR node.
+     * Answers whether the current caller holds {@code permission} on {@code site}, by checking it
+     * against the site's own JCR node.
+     *
+     * <p>This is the target-scoping primitive for SEC-136. It backs both
+     * {@link #deleteSiteByKey} ({@code websitesDelete}) and {@link #exportWebsite}
+     * ({@code websitesExport}) — operations whose authorization depends on <em>which</em> site is
+     * named, and which the root-evaluated {@link GraphQLRequiresPermission} annotation therefore
+     * cannot express.
      *
      * <p>Three properties of this check are load-bearing and must survive refactoring:
      *
@@ -276,26 +300,34 @@ public class WebsitesAdminMutation {
      *       {@code GqlJcrPermissionChecker}.</li>
      * </ul>
      *
-     * <p>Server administrators are covered without a special case: {@code websitesDelete} is
-     * declared as a child of the {@code admin} permission, and Jahia registers nested permission
-     * nodes as aggregated sub-privileges, so holding {@code admin} at the root implies it.
+     * <p>Server administrators are covered without a special case: these permissions are declared
+     * as children of the {@code admin} permission, and Jahia registers nested permission nodes as
+     * aggregated sub-privileges, so holding {@code admin} at the root implies them.
      *
+     * @param site       the target site, already resolved from the repository
+     * @param permission the permission to require on that site
+     * @param operation  mutation name, for logging only
      * @return {@code true} only if the permission is positively held on the target site
      */
-    private static boolean callerMayDeleteSite(JahiaSite site) {
+    private static boolean callerMayActOnSite(JahiaSite site, String permission, String operation) {
         final String sitePath = site.getJCRLocalPath();
         try {
-            return JCRSessionFactory.getInstance().getCurrentUserSession()
+            if (JCRSessionFactory.getInstance().getCurrentUserSession()
                     .getNode(sitePath)
-                    .hasPermission(WEBSITES_DELETE_PERMISSION);
+                    .hasPermission(permission)) {
+                return true;
+            }
+            LOGGER.warn("{}: refused on '{}': caller lacks the '{}' permission on that site",
+                    operation, sitePath, permission);
+            return false;
         } catch (PathNotFoundException ex) {
             // The caller cannot see the site at all. Deny — invisible and unauthorized are the
             // same answer here, and distinguishing them would leak site existence.
-            LOGGER.warn("Denying deletion of '{}': the caller cannot resolve that site", sitePath);
+            LOGGER.warn("{}: refused on '{}': the caller cannot resolve that site", operation, sitePath);
             return false;
         } catch (RepositoryException ex) {
-            LOGGER.error("Denying deletion of '{}': unable to verify the '{}' permission",
-                    sitePath, WEBSITES_DELETE_PERMISSION, ex);
+            LOGGER.error("{}: refused on '{}': unable to verify the '{}' permission",
+                    operation, sitePath, permission, ex);
             return false;
         }
     }
@@ -380,7 +412,10 @@ public class WebsitesAdminMutation {
     @GraphQLField
     @GraphQLDescription("Export a website")
     @GraphQLAsync
-    @GraphQLRequiresPermission("websitesExport")
+    // Coarse gate only — see callerMayActOnSite. The annotation is evaluated at the repository
+    // root, and websitesExport is granted per site, so naming it here would deny every site
+    // administrator before the body ran (the same trap documented on deleteSiteByKey).
+    @GraphQLRequiresPermission("websitesAdmin")
     public Boolean exportWebsite(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("exportPath") @GraphQLDescription("Export path") String exportPath,
@@ -396,6 +431,17 @@ public class WebsitesAdminMutation {
             final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
             if (site == null) {
                 LOGGER.error("exportWebsite: site '{}' not found", siteKey);
+                return Boolean.FALSE;
+            }
+            // SEC-136 §4.3: exporting a site is target-scoped, exactly like deleting one. The
+            // annotation above is evaluated at the repository root and cannot name the target,
+            // so the caller must additionally hold websitesExport ON THIS SITE.
+            //
+            // The export itself runs under the caller's session, so an unauthorized caller would
+            // in practice get an empty archive rather than data — but relying on that would make
+            // the security property depend on read ACLs happening to line up. Refusing outright
+            // is explicit, and it avoids writing a misleading near-empty archive to disk.
+            if (!callerMayActOnSite(site, WEBSITES_EXPORT_PERMISSION, "exportWebsite")) {
                 return Boolean.FALSE;
             }
             // Refuse to delete if the resolved path is a symlink — a symlink at the
@@ -749,6 +795,19 @@ public class WebsitesAdminMutation {
             + "unexpected export or upload failure.")
     @GraphQLRequiresPermission("websitesExportAll")
     public ExportAllSitesResults exportAllSites() {
+        // SEC-136 §4.3: a bulk instance export is inherently instance-wide, so it is restricted
+        // to server administrators. The alternative — letting a delegated holder run it under
+        // their own session — produces an archive silently containing only the sites they can
+        // read. A partial backup that looks complete is worse than a refusal.
+        //
+        // Checked before the S3 precondition so an unauthorized caller learns nothing about
+        // whether the instance is configured.
+        if (!callerIsServerAdministrator()) {
+            LOGGER.error("exportAllSites denied: requires full administrator privileges "
+                    + "(a bulk export spans the whole instance)");
+            return ExportAllSitesResults.NOT_SERVER_ADMINISTRATOR;
+        }
+
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
 
         // Check the S3 precondition BEFORE exporting. This used to run after exportAllSites(...),
@@ -879,6 +938,15 @@ public class WebsitesAdminMutation {
          * first, nothing was exported either. Remedy by completing the configuration under PID
          * {@code org.jahia.community.graphql.websites}.
          */
-        AWS_S3_BUCKET_NOT_CONFIGURED
+        AWS_S3_BUCKET_NOT_CONFIGURED,
+        /**
+         * The caller is not a server administrator, so nothing was exported (SEC-136 §4.3).
+         *
+         * <p>This is an <em>actionable</em> outcome, which is why it belongs in this enum rather
+         * than being raised as a GraphQL error: the operator remedies it by granting the caller
+         * the {@code admin} role at the repository root. It mirrors how {@link #importWebsite}
+         * self-aborts rather than throwing when its administrator gate is not met.
+         */
+        NOT_SERVER_ADMINISTRATOR
     }
 }

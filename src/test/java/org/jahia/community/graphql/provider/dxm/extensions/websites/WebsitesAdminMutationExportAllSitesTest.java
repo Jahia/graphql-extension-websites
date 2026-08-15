@@ -80,13 +80,16 @@ public class WebsitesAdminMutationExportAllSitesTest {
 
     // -------------------------------------------------------------------------
     // D5 — the dead ExportAllSitesResults.FAILURE constant was removed in Stage 7.
-    // This pins the enum to exactly the two reachable values the method returns.
+    // This pins the enum to exactly the reachable values the method returns.
+    // NOT_SERVER_ADMINISTRATOR was added in SEC-136 §4.3, when the bulk export was
+    // restricted to server administrators.
     // -------------------------------------------------------------------------
 
     @Test
     public void exportAllSitesResults_declaresReachableValuesOnly() {
         assertThat(WebsitesAdminMutation.ExportAllSitesResults.values())
                 .containsExactlyInAnyOrder(WebsitesAdminMutation.ExportAllSitesResults.SUCCESS,
-                        WebsitesAdminMutation.ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED);
+                        WebsitesAdminMutation.ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED,
+                        WebsitesAdminMutation.ExportAllSitesResults.NOT_SERVER_ADMINISTRATOR);
     }
 }

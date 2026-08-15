@@ -52,13 +52,12 @@ public class WebsitesAdminMutationPermissionAnnotationTest {
     @Test
     public void eachMutationCarriesItsOwnPermission() {
         assertThat(permissionOn("createSiteByKey")).isEqualTo("websitesCreate");
-        assertThat(permissionOn("exportWebsite")).isEqualTo("websitesExport");
         assertThat(permissionOn("exportAllSites")).isEqualTo("websitesExportAll");
     }
 
     /**
-     * The load-bearing one. See the class javadoc: {@code websitesDelete} at the annotation level
-     * would be evaluated at {@code /}, where it is intentionally never granted.
+     * The load-bearing ones. See the class javadoc: naming the fine permission at the annotation
+     * level would evaluate it at {@code /}, where it is intentionally never granted.
      */
     @Test
     public void deleteSiteByKey_annotationIsTheCoarseGate_notTheTargetScopedOne() {
@@ -70,6 +69,20 @@ public class WebsitesAdminMutationPermissionAnnotationTest {
                 .isNotEqualTo("websitesDelete");
     }
 
+    /**
+     * Same trap as deletion, and easier to fall into because the fine permission shares its name
+     * with the operation. {@code websitesExport} lives only on the site-scoped role.
+     */
+    @Test
+    public void exportWebsite_annotationIsTheCoarseGate_notTheTargetScopedOne() {
+        assertThat(permissionOn("exportWebsite"))
+                .as("exportWebsite's annotation is evaluated at the repository root; "
+                        + "websitesExport is granted per site, so annotating it there would deny "
+                        + "every site administrator. The target-scoped check belongs in the body.")
+                .isEqualTo("websitesAdmin")
+                .isNotEqualTo("websitesExport");
+    }
+
     /** importWebsite's real gate is {@code callerIsServerAdministrator()} in the body. */
     @Test
     public void importWebsite_keepsTheCoarseGate() {
@@ -77,20 +90,23 @@ public class WebsitesAdminMutationPermissionAnnotationTest {
     }
 
     /**
-     * The split is only meaningful if the operations do not collapse onto one permission. If a
-     * future change points create, export and exportAll at the same value, delegating one would
-     * silently delegate all three.
+     * The split is only meaningful if the root-delegable operations do not collapse onto one
+     * permission. If a future change points creation and bulk export at the same value,
+     * delegating one would silently delegate the other.
+     *
+     * <p>{@code exportWebsite} is deliberately excluded: it shares the coarse
+     * {@code websitesAdmin} annotation with delete and import, and its independence comes from
+     * the per-site {@code websitesExport} check in the body instead.
      */
     @Test
     public void theRootGatedOperationsDoNotShareOnePermission() {
         Set<String> distinct = new HashSet<>(Arrays.asList(
                 permissionOn("createSiteByKey"),
-                permissionOn("exportWebsite"),
                 permissionOn("exportAllSites")));
 
         assertThat(distinct)
-                .as("create, export and exportAll must remain independently delegable")
-                .hasSize(3);
+                .as("creation and bulk export must remain independently delegable")
+                .hasSize(2);
     }
 
     /** Every public mutation is gated; none may be added without a permission. */

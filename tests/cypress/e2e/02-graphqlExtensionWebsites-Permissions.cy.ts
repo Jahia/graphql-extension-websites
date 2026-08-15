@@ -28,10 +28,9 @@ import {createUser, deleteUser, grantRoles} from '@jahia/cypress';
  * permission — so the tests prove fine-grained granularity, not merely that a full
  * administrator can pass.
  *
- * Safe gated op: `exportAllSites` is used for the allow path because in CI (no AWS S3
- * configured) it is non-destructive — it builds an export to a temp file that is always
- * removed in a `finally`, never touches site content, and returns the benign
- * `AWS_S3_BUCKET_NOT_CONFIGURED` result instead of uploading anything.
+ * Safe gated op: `exportAllSites` is used for the annotation-gate allow path because it is
+ * non-destructive — it never touches site content, and as of §4.3 it self-aborts with
+ * `NOT_SERVER_ADMINISTRATOR` before doing any work when the caller is not a server admin.
  */
 describe('GraphQL Extension Websites — permission enforcement', () => {
     const ROLE_NAME = 'graphql-extension-websites-administrator';
@@ -101,11 +100,16 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
             });
         });
 
-        it('allows the gated mutation for a user granted only the module permission', () => {
+        // The holder passes the `websitesExportAll` annotation gate — no "Permission denied" —
+        // and is then refused by the in-body administrator gate added in §4.3. Asserting the
+        // enum value rather than an error is what distinguishes "reached the resolver and was
+        // refused there" from "never got past the annotation", which is the whole point of
+        // having two layers.
+        it('allows the gated mutation through the annotation, then self-aborts for a non-administrator', () => {
             exportAllSitesAs(ALLOWED_USER).then((result: never) => {
-                expect(errorsOf(result), 'should have no errors').to.have.length(0);
+                expect(errorsOf(result), 'annotation gate is passed — no Permission denied').to.have.length(0);
                 expect((result as {data: {admin: {jahia: {websites: {exportAllSites: string}}}}}).data.admin.jahia.websites.exportAllSites)
-                    .to.eq('AWS_S3_BUCKET_NOT_CONFIGURED');
+                    .to.eq('NOT_SERVER_ADMINISTRATOR');
             });
         });
     });
@@ -195,6 +199,88 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
                     .to.have.length.greaterThan(0);
                 expect(errs.map((e: {message: string}) => e.message).join(' '))
                     .to.contain('Permission denied');
+            });
+        });
+    });
+
+    // SEC-136 §4.3 — exportWebsite is TARGET-scoped, so a site administrator can export the site
+    // they administer and nothing else, while a server administrator can export anything.
+    //
+    // This is the pair of properties the §4.3 change exists to deliver. The "own site" case must
+    // pass or the delegation is useless; the "other site" case must fail or the scoping is
+    // decorative. Testing only one of them would let a broken implementation look correct.
+    describe('site export is scoped to the caller authority', () => {
+        const OWNED_SITE = 'gewOwnedSite';
+        const OTHER_SITE = 'gewOtherSite';
+        const SITE_ROLE = 'graphql-extension-websites-site-administrator';
+        const SITE_ADMIN_USER = 'gewSiteAdminUser';
+
+        before(() => {
+            cy.apolloClient();
+            cy.login();
+            createUser(SITE_ADMIN_USER, PASSWORD);
+            // Needs the server role to reach the API at all, plus the site role on ONE site.
+            grantRoles('/', [ROLE_NAME], SITE_ADMIN_USER, 'USER');
+            [OWNED_SITE, OTHER_SITE].forEach(key => {
+                cy.apollo({
+                    mutation: createSiteByKey,
+                    variables: {
+                        siteKey: key,
+                        serverName: `${key}.local`,
+                        title: key,
+                        templateSet: 'templates-system',
+                        locale: 'en'
+                    }
+                });
+            });
+            grantRoles(`/sites/${OWNED_SITE}`, [SITE_ROLE], SITE_ADMIN_USER, 'USER');
+        });
+
+        after(() => {
+            cy.apolloClient();
+            cy.login();
+            [OWNED_SITE, OTHER_SITE].forEach(key => {
+                cy.apollo({mutation: deleteSiteByKey, variables: {siteKey: key}});
+            });
+            deleteUser(SITE_ADMIN_USER);
+        });
+
+        it('allows a site administrator to export the site they administer', () => {
+            runAs(SITE_ADMIN_USER, exportWebsite, {
+                siteKey: OWNED_SITE, exportPath: 'gew-owned-export', onlyStaging: true
+            }).then((result: never) => {
+                expect(errorsOf(result), 'annotation gate is passed — no Permission denied')
+                    .to.have.length(0);
+                expect((result as {data: {admin: {jahia: {websites: {exportWebsite: boolean}}}}})
+                    .data.admin.jahia.websites.exportWebsite,
+                'the site role must make exportWebsite usable on the granted site').to.eq(true);
+            });
+        });
+
+        it('refuses that same administrator on a site they do not administer', () => {
+            runAs(SITE_ADMIN_USER, exportWebsite, {
+                siteKey: OTHER_SITE, exportPath: 'gew-other-export', onlyStaging: true
+            }).then((result: never) => {
+                // The annotation still passes — the refusal must come from the target-scoped
+                // check, not from the coarse gate.
+                expect(errorsOf(result), 'annotation gate is passed — no Permission denied')
+                    .to.have.length(0);
+                expect((result as {data: {admin: {jahia: {websites: {exportWebsite: boolean}}}}})
+                    .data.admin.jahia.websites.exportWebsite,
+                'a site administrator must not export a site they hold no rights on').to.eq(false);
+            });
+        });
+
+        it('still allows an administrator to export either site', () => {
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({
+                mutation: exportWebsite,
+                variables: {siteKey: OTHER_SITE, exportPath: 'gew-root-export', onlyStaging: true}
+            }).then((result: never) => {
+                expect(errorsOf(result), 'root must not be denied').to.have.length(0);
+                expect((result as {data: {admin: {jahia: {websites: {exportWebsite: boolean}}}}})
+                    .data.admin.jahia.websites.exportWebsite).to.eq(true);
             });
         });
     });

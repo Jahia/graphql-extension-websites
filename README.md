@@ -18,14 +18,20 @@ act on a specific site carry an additional target-scoped check in the method bod
 |---|---|---|
 | `createSiteByKey` | `websitesCreate` | Creates a new site. Runs under a system session — that escalation is the delegation mechanism (see below) |
 | `deleteSiteByKey` | `websitesAdmin` **and** `websitesDelete` **on the target site** | **Only sites the caller is authorized on.** Server administrators retain full reach |
-| `exportWebsite` | `websitesExport` | Runs as the caller; the archive is bounded by that session's read rights |
-| `exportAllSites` | `websitesExportAll` | Runs as the caller (SEC-136) — see the caveat below |
+| `exportWebsite` | `websitesAdmin` **and** `websitesExport` **on the target site** | **Only sites the caller is authorized on.** Runs as the caller, so the archive is further bounded by that session's read rights |
+| `exportAllSites` | `websitesExportAll` **and** full server administrator (`admin` at `/`) | Instance-wide, so restricted to server administrators |
 | `importWebsite` | `websitesAdmin` **and** full server administrator (`admin` at `/`) | Instance-wide; imports users and roles |
 
 `deleteSiteByKey` and `importWebsite` keep the coarse `websitesAdmin` annotation because their
 real authorization lives in the method body.  For deletion the annotation **must not** be
 `websitesDelete`: that permission is intentionally never granted at the repository root, so
 annotating it there would deny every site-scoped holder before the body could run.
+
+`exportWebsite` follows the same pattern for the same reason: its fine permission
+(`websitesExport`) lives only on the site-scoped role, so naming it in the annotation — which is
+evaluated at `/` — would deny every site administrator.  Adding it to the server role instead
+would be worse: granted at `/` it inherits down to every site, satisfying the in-body per-site
+check everywhere and making it meaningless.
 
 ### Site deletion is scoped to the caller (SEC-136)
 
@@ -40,17 +46,26 @@ being deleted**, checked in the caller's own JCR session.  Grant it per site wit
 this check enforces it: `JahiaSitesService.removeSite` performs the deletion under a system
 session, so the caller's rights are never consulted by Jahia itself.
 
-### Caveat: what the `exportAllSites` de-escalation does and does not promise
+### Export confidentiality
 
-`exportAllSites` runs the export under the **calling user's own** JCR session (SEC-136) — it
-does **not** escalate to root, so the archive is bounded by what that session may read.
+Both export mutations run under the **calling user's own** JCR session (SEC-136) — neither
+escalates to root — so an archive is bounded by what that session may read.
 
-That bound is only meaningful if the caller's read rights are themselves narrow.  The
-`graphql-extension-websites-administrator` role shipped by this module grants
-`jcr:read_default` at the repository root, so **for a holder of that role the bound is the
-whole repository** — all sites, `/users`, `/roles`.  Do not read the de-escalation as a
-confidentiality guarantee for the shipped role.  If you need a narrower bound, grant the
-module's permissions through a role with a narrower read grant.
+Until 2.2.0 that bound was worthless for the shipped role, which granted `jcr:read_default` at
+the repository root: "confined to the caller's read rights" plus "the caller can read
+everything" is still a full-instance dump.  The server role no longer carries that grant.  Read
+is granted per site through the site-scoped role, so a site administrator's export contains
+their site and nothing else.
+
+That root grant was never needed to reach the API.  Verified on a live instance: a caller
+holding only `graphqlAdminMutation` and `websitesCreate` — no read permission at all — can
+invoke `createSiteByKey` successfully.  Jahia already satisfies the DXM `admin` field's
+`jcr:read/jcr:system` requirement for authenticated users by other means.
+
+`exportAllSites` is a separate case: a bulk export spans the whole instance, so it is restricted
+to server administrators outright.  A read-bounded bulk export would hand a delegated holder an
+archive silently containing only their own sites — a partial backup that looks complete, which
+is worse than a refusal.  Non-administrators get `NOT_SERVER_ADMINISTRATOR`.
 
 ## Roles
 
@@ -58,8 +73,8 @@ The module ships two roles:
 
 | Role | Granted at | Carries | Purpose |
 |---|---|---|---|
-| `graphql-extension-websites-administrator` | `/` (server role) | `jcr:read_default`, `graphqlAdminMutation`, `websitesAdmin`, `websitesCreate`, `websitesExport`, `websitesExportAll` | Full lifecycle **except deletion** |
-| `graphql-extension-websites-site-administrator` | `/sites/<siteKey>` (site role) | `websitesDelete` | Delete **that** site. Grant per site, in addition to the server role |
+| `graphql-extension-websites-administrator` | `/` (server role) | `graphqlAdminMutation`, `websitesAdmin`, `websitesCreate`, `websitesExportAll` | Reach the API and create sites. Does **not** grant site deletion or site export, and no longer grants repository-wide read |
+| `graphql-extension-websites-site-administrator` | `/sites/<siteKey>` (site role) | `jcr:read_default`, `websitesDelete`, `websitesExport` | Export and delete **that** site. Grant per site, in addition to the server role. Includes read on the site, which `exportWebsite` needs to produce a non-empty archive |
 
 ### Delegating a narrower subset
 
@@ -70,15 +85,15 @@ server role carrying only what they need:
 | Permission | Grants |
 |---|---|
 | `websitesCreate` | `createSiteByKey` |
-| `websitesExport` | `exportWebsite` |
-| `websitesExportAll` | `exportAllSites` |
-| `websitesAdmin` | Reaches `deleteSiteByKey` and `importWebsite`, whose real gates are in the method body |
+| `websitesExport` | `exportWebsite`, **on the site it is granted on** |
+| `websitesExportAll` | Reaches `exportAllSites`, which then requires full server administrator |
+| `websitesAdmin` | Reaches `deleteSiteByKey`, `exportWebsite` and `importWebsite`, whose real gates are in the method body |
 | `websitesDelete` | `deleteSiteByKey`, **on the site it is granted on** |
 
 Any custom role also needs `jcr:read_default` and `graphqlAdminMutation` to traverse the
 `admin { jahia { ... } }` wrapper at all.
 
-`websitesDelete` is deliberately **absent** from the server role.  JCR permissions inherit
+`websitesDelete` and `websitesExport` are deliberately **absent** from the server role.  JCR permissions inherit
 down the tree, so granting it at `/` would satisfy the per-site check on every site and make
 it vacuous.  For the same reason `websitesDelete` is declared as a **sibling** of
 `websitesAdmin` in `permissions.xml`, never nested beneath it — Jahia registers nested
@@ -237,12 +252,9 @@ enum — only add a constant for something an operator can remedy.
   `ImportExportBaseService`.  This module delegates entirely to that layer; no additional
   ZIP-slip check is performed here.  The mutation is gated by `websitesAdmin`, so only
   trusted administrators can trigger imports.
-- **`exportAllSites` privilege scope**: the export runs under the caller's own session
-  (SEC-136), so it is not an instance-wide *root* dump.  It is, however, bounded only by the
-  caller's read rights, and the shipped `graphql-extension-websites-administrator` role grants
-  `jcr:read_default` at the repository root — so for a holder of that role the export still
-  covers the whole repository.  Narrowing that read grant would break delegated exports and is
-  deferred; see the caveat under [Permissions](#permissions).
+- **`exportAllSites` privilege scope**: resolved in 2.2.0 — the bulk export now requires full
+  server-administrator rights, and the server role no longer grants repository-wide read.  See
+  [Export confidentiality](#export-confidentiality).
 - **`createSiteByKey` privilege scope**: it runs under a system session, and that escalation
   is load-bearing (writing `/sites/<siteKey>` needs rights on `/sites` that a delegated holder
   lacks).  A holder can therefore create sites and enable any **already-installed** module on

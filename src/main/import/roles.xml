@@ -7,7 +7,19 @@
   make the per-site check in deleteSiteByKey pass everywhere and reinstate the vulnerability.
 
   Site deletion is delegated instead through `graphql-extension-websites-site-administrator`,
-  which is granted per site on /sites/<siteKey>.
+  which is granted per site on /sites/<siteKey>. The same reasoning applies to `websitesExport`
+  as of §4.3: exporting a named site is target-scoped, so that permission also lives only on the
+  site role.
+
+  §4.3 — the server role no longer carries `jcr:read_default`. It was never needed to reach the
+  API (verified on a live instance: a user holding only `graphqlAdminMutation` + `websitesCreate`
+  can call createSiteByKey), but because the role is granted at `/` and JCR permissions inherit
+  downward, it gave every holder read over the entire repository. That is what made the
+  "exportAllSites is bounded by the caller's read rights" claim vacuous for this role.
+
+  Read is now granted only where it is actually needed: on the site role, scoped to the site it
+  is granted on, so exportWebsite produces a real archive for a site administrator and nothing
+  for anyone else.
 -->
 <roles jcr:primaryType="jnt:roles"
        xmlns:jcr="http://www.jcp.org/jcr/1.0"
@@ -17,7 +29,7 @@
     <graphql-extension-websites-administrator jcr:primaryType="jnt:role"
                                               j:nodeTypes="rep:root"
                                               j:roleGroup="server-role"
-                                              j:permissionNames="jcr:read_default graphqlAdminMutation websitesAdmin websitesCreate websitesExport websitesExportAll"
+                                              j:permissionNames="graphqlAdminMutation websitesAdmin websitesCreate websitesExportAll"
                                               j:privilegedAccess="true">
         <j:translation_en jcr:primaryType="jnt:translation"
                           jcr:language="en"
@@ -28,11 +40,11 @@
     <graphql-extension-websites-site-administrator jcr:primaryType="jnt:role"
                                                    j:nodeTypes="jnt:virtualsite"
                                                    j:roleGroup="site-role"
-                                                   j:permissionNames="websitesDelete"
+                                                   j:permissionNames="jcr:read_default websitesDelete websitesExport"
                                                    j:privilegedAccess="true">
         <j:translation_en jcr:primaryType="jnt:translation"
                           jcr:language="en"
                           jcr:title="GraphQL Extension Websites site administrator"
-                          jcr:description="Grants deletion of the site this role is granted on, through the deleteSiteByKey GraphQL mutation. Grant it per site; the holder also needs the server-level 'GraphQL Extension Websites administrator' role to reach the API."/>
+                          jcr:description="Grants export and deletion of the site this role is granted on, through the exportWebsite and deleteSiteByKey GraphQL mutations. Grant it per site; the holder also needs the server-level 'GraphQL Extension Websites administrator' role to reach the API. Includes read on the site, which exportWebsite needs to produce a non-empty archive."/>
     </graphql-extension-websites-site-administrator>
 </roles>
