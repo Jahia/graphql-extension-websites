@@ -55,10 +55,14 @@ import java.util.*;
  * GraphQL mutation extensions for Jahia website lifecycle operations (create, delete,
  * export, import, bulk export-to-S3).
  *
- * <p><b>Permissions.</b> Each mutation is gated by its own permission via
- * {@link GraphQLRequiresPermission}, so an operator can delegate one operation without
- * delegating the others.  Unauthenticated or insufficiently privileged requests are rejected
- * by the GraphQL security layer before the method body executes.
+ * <p><b>Permissions.</b> Every mutation is gated by {@link GraphQLRequiresPermission}, but the
+ * gates are <b>not all distinct</b>: only {@code createSiteByKey} ({@code websitesCreate}) and
+ * {@code exportAllSites} ({@code websitesExportAll}) carry a permission of their own.
+ * {@code deleteSiteByKey}, {@code exportWebsite} and {@code importWebsite} all share the coarse
+ * {@code websitesAdmin} gate, so granting it to delegate one of the three opens the annotation
+ * gate on the other two as well — those three are separated by their in-body checks, not by the
+ * annotation. See the table below.  Unauthenticated or insufficiently privileged requests are
+ * rejected by the GraphQL security layer before the method body executes.
  *
  * <table border="1">
  *   <caption>Permission per mutation</caption>
@@ -166,7 +170,7 @@ public class WebsitesAdminMutation {
     private static final int EXPORT_SUFFIX_LENGTH = 8;
     /**
      * Target-scoped permission required to delete a site (SEC-136). Checked against the site
-     * node itself, not the repository root — see {@link #callerMayDeleteSite(JahiaSite)}.
+     * node itself, not the repository root — see {@link #callerMayActOnSite(JahiaSite, String, String)}.
      */
     private static final String WEBSITES_DELETE_PERMISSION = "websitesDelete";
     /**
@@ -191,7 +195,7 @@ public class WebsitesAdminMutation {
             @GraphQLName("serverNameAliasesAsString") @GraphQLDescription("Server name aliases") String serverNameAliases,
             @GraphQLName("title") @GraphQLDescription("Title") String title,
             @GraphQLName("templateSet") @GraphQLDescription("Template set") String templateSet,
-            @GraphQLName("modulesToDeploy") @GraphQLDescription("Modules to deploy") String[] modulesToDeploy,
+            @GraphQLName("modulesToDeploy") @GraphQLDescription("Modules to deploy") List<String> modulesToDeploy,
             @GraphQLName("locale") @GraphQLDescription("Locale") String locale
     ) {
 
@@ -205,7 +209,7 @@ public class WebsitesAdminMutation {
                     siteCreationInfo.setServerNameAliasesAsString(serverNameAliases);
                     siteCreationInfo.setTitle(title);
                     siteCreationInfo.setTemplateSet(templateSet);
-                    siteCreationInfo.setModulesToDeploy(modulesToDeploy);
+                    siteCreationInfo.setModulesToDeploy(toModulesArray(modulesToDeploy));
                     siteCreationInfo.setLocale(locale);
                     ServicesRegistry.getInstance().getJahiaSitesService().addSite(siteCreationInfo, session);
                     result = Boolean.TRUE;
@@ -224,7 +228,7 @@ public class WebsitesAdminMutation {
     /**
      * Deletes the Jahia website identified by {@code siteKey}.
      *
-     * <p><b>Authorization (SEC-136).</b> The class-level {@code websitesAdmin} annotation is
+     * <p><b>Authorization (SEC-136).</b> The method-level {@code websitesAdmin} annotation is
      * evaluated at the repository root and therefore only answers "may this caller reach the
      * websites API at all" — it says nothing about <em>which</em> site may be destroyed. Until
      * 2.1.0 that was the only gate, so any holder of the delegated
@@ -233,7 +237,7 @@ public class WebsitesAdminMutation {
      *
      * <p>This method therefore performs a second, target-scoped check: the caller must hold
      * {@code websitesDelete} <em>on the site node itself</em>, evaluated in the caller's own
-     * session (see {@link #callerMayDeleteSite(JahiaSite)}). Note that no such check is implied
+     * session (see {@link #callerMayActOnSite(JahiaSite, String, String)}). Note that no such check is implied
      * anywhere below us — {@code JahiaSitesService.removeSite} performs the deletion under
      * {@code doExecuteWithSystemSession}, so the caller's rights are never consulted by Jahia
      * and this check is the only thing standing between a caller and site destruction.
@@ -273,6 +277,36 @@ public class WebsitesAdminMutation {
             LOGGER.error(ERR_MSG_IMP_TO_DELETE_SITE, siteKey, ex);
         }
         return success;
+    }
+
+    /**
+     * Adapts the GraphQL {@code [String]} argument to the {@code String[]} that
+     * {@link SiteCreationInfo#setModulesToDeploy(String[])} takes.
+     *
+     * <p><b>Why the mutation parameter is a {@link List} and must stay one.</b> It was declared
+     * {@code String[]} until 2.2.1, which made {@code createSiteByKey} fail with
+     * {@code IllegalArgumentException: argument type mismatch} for <em>every</em> caller — root
+     * included — whenever {@code modulesToDeploy} was supplied, even as an empty list.
+     *
+     * <p>graphql-java-annotations converts a GraphQL list argument to the Java parameter type only
+     * when that parameter is a parameterized {@code List<T>}: {@code MethodDataFetcher.buildArg}
+     * guards the conversion on {@code instanceof ParameterizedType && instanceof GraphQLList}. An
+     * array parameter is a plain {@code Class}, misses that branch, and receives the raw
+     * {@code ArrayList}, which then fails reflective {@code Method.invoke}.
+     *
+     * <p>Do not "simplify" this back to an array. {@code WebsitesAdminMutationArgumentTypeTest}
+     * fails if any {@code @GraphQLField} method in this class declares an array parameter.
+     *
+     * @param modulesToDeploy modules requested by the caller; may be {@code null} when the
+     *                        argument is omitted
+     * @return {@code null} when nothing was supplied, so the behaviour of omitting the argument is
+     *         unchanged from before the fix
+     */
+    private static String[] toModulesArray(List<String> modulesToDeploy) {
+        if (modulesToDeploy == null) {
+            return null;
+        }
+        return modulesToDeploy.toArray(new String[0]);
     }
 
     /**
@@ -332,18 +366,6 @@ public class WebsitesAdminMutation {
         }
     }
 
-    /**
-     * Exports a single website to an on-disk directory.
-     *
-     * <p>This mutation is {@link GraphQLAsync}: the GraphQL response is returned before the
-     * export completes.  Clients cannot poll for completion via this mutation.
-     *
-     * @param siteKey      key of the site to export
-     * @param exportPath   path relative to {@code jahiaVarDiskPath/exports/}; must not
-     *                     escape that directory
-     * @param onlyStaging  when {@code true} only staging content is included
-     * @return {@code true} on success; {@code false} on error or invalid path
-     */
     /**
      * Resolves a user-supplied path against a base directory using {@link PathSecurity},
      * returning {@code null} (and logging) instead of propagating {@link IllegalArgumentException}
@@ -409,6 +431,23 @@ public class WebsitesAdminMutation {
         return params;
     }
 
+    /**
+     * Exports a single website to an on-disk directory.
+     *
+     * <p>This mutation is {@link GraphQLAsync}: the GraphQL response is returned before the
+     * export completes.  Clients cannot poll for completion via this mutation.
+     *
+     * <p><b>Authorization (SEC-136 §4.3).</b> Beyond the coarse {@code websitesAdmin}
+     * annotation, the caller must hold {@code websitesExport} <em>on the target site</em>, checked
+     * in the caller's own session by {@link #callerMayActOnSite(JahiaSite, String, String)}.
+     *
+     * @param siteKey      key of the site to export
+     * @param exportPath   path relative to {@code jahiaVarDiskPath/exports/}; must not
+     *                     escape that directory
+     * @param onlyStaging  when {@code true} only staging content is included
+     * @return {@code true} on success; {@code false} if the path is rejected, the site does not
+     *         exist, the caller is not authorized to export it, or the export fails
+     */
     @GraphQLField
     @GraphQLDescription("Export a website")
     @GraphQLAsync
@@ -757,13 +796,21 @@ public class WebsitesAdminMutation {
      * Exports all sites in this Jahia instance to a timestamped ZIP and uploads it to the
      * configured AWS S3 bucket.
      *
-     * <p><b>Permission:</b> requires {@code websitesAdmin}.
+     * <p><b>Permission:</b> requires {@code websitesExportAll}, evaluated at the repository root
+     * by {@link GraphQLRequiresPermission}, <em>and</em> full server-administrator rights
+     * ({@code admin} at the repository root), checked in the method body by
+     * {@link #callerIsServerAdministrator()}. A holder of the delegated {@code websitesAdmin}
+     * role cannot run this mutation: since 2.2.0 it returns
+     * {@link ExportAllSitesResults#NOT_SERVER_ADMINISTRATOR} before any other work
+     * (SEC-136 §4.3) — a bulk export spans the whole instance, and a read-bounded one would
+     * yield a partial backup that looks complete.
      *
-     * <p><b>Privilege scope (SEC-136):</b> the JCR export runs under the <em>caller's own</em>
-     * session — it does <b>not</b> switch the session user to root. The resulting archive is
-     * confined to the content the caller is authorized to read (enumerated via
-     * {@link JahiaSitesService#getSitesNodeList()}), so a {@code websitesAdmin} holder cannot
-     * use it to capture content beyond their own read rights.
+     * <p><b>Privilege scope (SEC-136):</b> the server-administrator gate above is the primary
+     * control. As defence in depth the JCR export additionally runs under the <em>caller's own</em>
+     * session — it does <b>not</b> switch the session user to root — so the archive is still
+     * bounded by what that session may read (sites enumerated via
+     * {@link JahiaSitesService#getSitesNodeList()}). That bound is no longer what keeps a
+     * delegated holder out; the gate is.
      *
      * <p><b>S3 credentials:</b> configure AWS credentials via the OSGi ConfigurationAdmin
      * service (PID {@code org.jahia.community.graphql.websites}) or the
@@ -785,8 +832,9 @@ public class WebsitesAdminMutation {
      * Callers should therefore branch on the returned value for configuration problems and
      * handle GraphQL errors for everything else.
      *
-     * @return {@link ExportAllSitesResults#SUCCESS} on success, or
-     *         {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED} if S3 is not configured
+     * @return {@link ExportAllSitesResults#NOT_SERVER_ADMINISTRATOR} if the caller is not a server
+     *         administrator; {@link ExportAllSitesResults#AWS_S3_BUCKET_NOT_CONFIGURED} if S3 is
+     *         not configured; {@link ExportAllSitesResults#SUCCESS} on success
      * @throws DataFetchingException on any unexpected failure during export or upload
      */
     @GraphQLField

@@ -1,0 +1,30 @@
+# createSiteByKey WITH the modulesToDeploy list argument populated.
+# Kept separate from createSiteByKey.graphql so the existing specs stay unchanged.
+#
+# This argument is the one that broke: while modulesToDeploy was declared String[] in Java,
+# supplying it — even as [] — failed with "argument type mismatch" for every caller, root
+# included. The original fixture omits the argument entirely, so every green run exercised only
+# the null path and the defect survived.
+mutation CreateSiteByKeyWithModules(
+    $siteKey: String!
+    $serverName: String!
+    $title: String!
+    $templateSet: String!
+    $modulesToDeploy: [String]
+    $locale: String!
+) {
+    admin {
+        jahia {
+            websites {
+                createSiteByKey(
+                    siteKey: $siteKey
+                    serverName: $serverName
+                    title: $title
+                    templateSet: $templateSet
+                    modulesToDeploy: $modulesToDeploy
+                    locale: $locale
+                )
+            }
+        }
+    }
+}

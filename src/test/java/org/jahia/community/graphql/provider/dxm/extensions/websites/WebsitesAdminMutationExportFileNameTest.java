@@ -52,6 +52,14 @@ public class WebsitesAdminMutationExportFileNameTest {
         assertThat(name).startsWith("export-20260102030405-");
     }
 
+    /**
+     * <b>If this ever fails intermittently, suspect the birthday bound before suspecting a
+     * regression.</b> The suffix is 8 hex characters, i.e. a 32-bit space, and 500 draws from it
+     * collide with probability ≈ 500²/2·2³² ≈ 2.9e-5 — about one run in 34,000. A genuine
+     * regression (a suffix that stops being random, or is dropped) fails this <em>every</em> time
+     * and usually collapses the set to a single element, so check the reported size before
+     * reaching for the git log: 499 means bad luck, 1 means the suffix is gone.
+     */
     @Test
     public void buildExportFileName_isUniqueAcrossCallsWithinTheSameSecond() {
         // Arrange — the identical timestamp is exactly the collision the old format could not survive

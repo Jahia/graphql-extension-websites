@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  SEC-136: `websitesDelete` MUST stay a SIBLING of `websitesAdmin`, never a child of it.
+  SEC-136: `websitesDelete` and `websitesExport` MUST stay SIBLINGS of `websitesAdmin`, never
+  children of it.
 
   Jahia registers nested permission nodes as aggregated sub-privileges of their parent
   (JahiaPrivilegeRegistry.registerPrivileges -> new PrivilegeImpl(..., subPrivileges, ...)),
@@ -15,28 +16,31 @@
 -->
 <permissions xmlns:jcr="http://www.jcp.org/jcr/1.0">
     <admin jcr:primaryType="jnt:permission">
-        <!-- Coarse entry gate, checked at "/". Retained on the two mutations whose real
-             authorization lives in the method body: deleteSiteByKey (target-scoped, see
-             websitesDelete) and importWebsite (server-administrator gate). Those two cannot be
-             gated by a finer permission at the annotation level — see the note below. -->
+        <!-- Coarse entry gate, checked at "/". Retained on the three mutations whose real
+             authorization lives in the method body: deleteSiteByKey and exportWebsite (both
+             target-scoped, see websitesDelete / websitesExport) and importWebsite
+             (server-administrator gate). None of the three can be gated by a finer permission
+             at the annotation level — see the note below. -->
         <websitesAdmin jcr:primaryType="jnt:permission"/>
 
         <!-- Per-operation gates, each checked at "/" by @GraphQLRequiresPermission on its own
              mutation. Splitting these lets an operator delegate site creation without also
-             delegating a bulk instance export, and so on. -->
+             delegating a bulk instance export, and so on. These two, together with the
+             `websitesAdmin` gate above, are the permissions that are safe to grant at the
+             repository root — and the only ones the shipped server role carries. -->
         <websitesCreate jcr:primaryType="jnt:permission"/>
-        <websitesExport jcr:primaryType="jnt:permission"/>
         <websitesExportAll jcr:primaryType="jnt:permission"/>
 
-        <!-- Target-scoped gate: may delete THIS site. Checked by
-             WebsitesAdminMutation.deleteSiteByKey against the target site node in the caller's
-             own session, NOT at "/". Deliberately absent from the root-granted server role;
-             carried by the site-scoped role in roles.xml.
+        <!-- Target-scoped gates: may export / delete THIS site. Checked by
+             WebsitesAdminMutation.exportWebsite and .deleteSiteByKey against the target site
+             node in the caller's own session, NOT at "/". Deliberately absent from the
+             root-granted server role; carried by the site-scoped role in roles.xml.
 
-             This is why deleteSiteByKey's annotation stays `websitesAdmin` rather than becoming
-             `websitesDelete`: the annotation is evaluated at the repository root, so annotating
-             it with a permission that is intentionally never granted at the root would deny the
-             site-scoped holder before the body could run. -->
+             This is why those two mutations' annotations stay `websitesAdmin` rather than
+             becoming `websitesExport` / `websitesDelete`: the annotation is evaluated at the
+             repository root, so annotating them with a permission that is intentionally never
+             granted at the root would deny the site-scoped holder before the body could run. -->
+        <websitesExport jcr:primaryType="jnt:permission"/>
         <websitesDelete jcr:primaryType="jnt:permission"/>
     </admin>
 </permissions>

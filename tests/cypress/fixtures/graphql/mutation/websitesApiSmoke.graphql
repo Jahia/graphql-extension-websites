@@ -1,0 +1,16 @@
+# Deployment smoke probe: resolves the `websites` namespace container and nothing else.
+#
+# No site is touched — selecting only __typename runs the container resolver
+# (WebsitesMutation.websites()) and stops there. If the module failed to start, or its schema
+# extension failed to register (e.g. a duplicate root field killing DXGraphQLProvider), this
+# fails schema validation with "Field 'websites' ... is undefined" instead of letting every
+# later spec fail for an apparently unrelated reason.
+mutation WebsitesApiSmoke {
+    admin {
+        jahia {
+            websites {
+                __typename
+            }
+        }
+    }
+}

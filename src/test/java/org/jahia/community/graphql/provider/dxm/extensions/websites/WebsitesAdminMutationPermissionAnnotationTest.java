@@ -6,6 +6,7 @@ import org.junit.Test;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -37,11 +38,25 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 public class WebsitesAdminMutationPermissionAnnotationTest {
 
+    /**
+     * Resolves a mutation by name, restricted to {@code @GraphQLField} methods.
+     *
+     * <p>The {@code @GraphQLField} filter is required, not cosmetic. Several names are overloaded
+     * between the exposed mutation and a private helper — {@code exportAllSites()} the mutation
+     * versus {@code exportAllSites(Path)} the worker. {@link Class#getDeclaredMethods()} has no
+     * specified ordering, so matching on name alone picked one or the other at random between
+     * runs and this class failed intermittently with "must carry @GraphQLRequiresPermission".
+     */
     private static String permissionOn(String methodName) {
-        Method method = Arrays.stream(WebsitesAdminMutation.class.getDeclaredMethods())
+        List<Method> candidates = Arrays.stream(WebsitesAdminMutation.class.getDeclaredMethods())
                 .filter(m -> m.getName().equals(methodName))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("No such mutation: " + methodName));
+                .filter(m -> m.getAnnotation(graphql.annotations.annotationTypes.GraphQLField.class) != null)
+                .collect(Collectors.toList());
+
+        assertThat(candidates)
+                .as("exactly one @GraphQLField method should be named %s", methodName)
+                .hasSize(1);
+        Method method = candidates.get(0);
         GraphQLRequiresPermission annotation = method.getAnnotation(GraphQLRequiresPermission.class);
         assertThat(annotation)
                 .as("%s must carry @GraphQLRequiresPermission — an unannotated mutation is ungated", methodName)
@@ -107,6 +122,35 @@ public class WebsitesAdminMutationPermissionAnnotationTest {
         assertThat(distinct)
                 .as("creation and bulk export must remain independently delegable")
                 .hasSize(2);
+    }
+
+    /**
+     * The surface itself is pinned, not just the gating of it.
+     *
+     * <p>{@link #everyGraphQLFieldIsGated()} catches a new mutation that carries no annotation at
+     * all — but not the likelier mistake: a new mutation annotated with an existing coarse
+     * permission, most plausibly {@code websitesAdmin} copied from the method above it. That is
+     * exactly how a delegated role silently acquires a capability nobody decided to delegate.
+     *
+     * <p>There is no way to detect "this permission is too coarse for what the method does" from
+     * an annotation, so the surface is fixed instead: adding or removing a mutation fails here and
+     * forces a conscious decision about which permission it should carry, and whether it needs an
+     * in-body target-scoped check as well.
+     */
+    @Test
+    public void theMutationSurfaceIsExactlyTheFiveKnownOperations() {
+        Set<String> mutations = Arrays.stream(WebsitesAdminMutation.class.getDeclaredMethods())
+                .filter(m -> m.getAnnotation(graphql.annotations.annotationTypes.GraphQLField.class) != null)
+                .map(Method::getName)
+                .collect(Collectors.toSet());
+
+        assertThat(mutations)
+                .as("a new @GraphQLField mutation must be a deliberate act: pick its permission, "
+                        + "decide whether it acts on a specific site (if so it needs an in-body "
+                        + "check — the annotation is evaluated at '/' and cannot express a target), "
+                        + "and update this list")
+                .containsExactlyInAnyOrder("createSiteByKey", "deleteSiteByKey", "exportWebsite",
+                        "importWebsite", "exportAllSites");
     }
 
     /** Every public mutation is gated; none may be added without a permission. */
