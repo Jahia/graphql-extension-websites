@@ -9,7 +9,7 @@
     <groupId>org.jahia.community</groupId>
     <artifactId>graphql-extension-websites</artifactId>
     <name>Jahia GraphQL Extension Websites</name>
-    <version>2.2.0</version>
+    <version>2.3.0-SNAPSHOT</version>
     <packaging>bundle</packaging>
     <description>GraphQL extension to manipulate websites</description>
 
