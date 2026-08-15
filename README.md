@@ -4,23 +4,28 @@ The purpose of this module is to allow the creation, deletion, import and export
 
 ## Permissions
 
-**All mutations in this module require the `websitesAdmin` permission.**  Callers that do not
-hold this permission will have their request rejected by the GraphQL security layer before
-any operation is attempted.
+**Every mutation is gated by its own permission**, checked by the GraphQL security layer
+before the method body executes.  Callers that do not hold the relevant permission have their
+request rejected.
 
-`websitesAdmin` is a **coarse gate**: it is evaluated against the repository root and answers
-only "may this caller reach the websites API at all".  It is not a per-site authorization —
-mutations that act on a specific site carry their own target-scoped check.
+Permissions named in the annotations are evaluated against the **repository root**, so they
+answer "may this caller perform this kind of operation" — not "on which site".  Mutations that
+act on a specific site carry an additional target-scoped check in the method body.
 
 ### Reach of each mutation
 
 | Mutation | Required to succeed | Reach |
 |---|---|---|
-| `createSiteByKey` | `websitesAdmin` | Creates a new site. Runs under a system session — that escalation is the delegation mechanism (see below) |
+| `createSiteByKey` | `websitesCreate` | Creates a new site. Runs under a system session — that escalation is the delegation mechanism (see below) |
 | `deleteSiteByKey` | `websitesAdmin` **and** `websitesDelete` **on the target site** | **Only sites the caller is authorized on.** Server administrators retain full reach |
-| `exportWebsite` | `websitesAdmin` | Runs as the caller; the archive is bounded by that session's read rights |
-| `exportAllSites` | `websitesAdmin` | Runs as the caller (SEC-136) — see the caveat below |
+| `exportWebsite` | `websitesExport` | Runs as the caller; the archive is bounded by that session's read rights |
+| `exportAllSites` | `websitesExportAll` | Runs as the caller (SEC-136) — see the caveat below |
 | `importWebsite` | `websitesAdmin` **and** full server administrator (`admin` at `/`) | Instance-wide; imports users and roles |
+
+`deleteSiteByKey` and `importWebsite` keep the coarse `websitesAdmin` annotation because their
+real authorization lives in the method body.  For deletion the annotation **must not** be
+`websitesDelete`: that permission is intentionally never granted at the repository root, so
+annotating it there would deny every site-scoped holder before the body could run.
 
 ### Site deletion is scoped to the caller (SEC-136)
 
@@ -53,8 +58,25 @@ The module ships two roles:
 
 | Role | Granted at | Carries | Purpose |
 |---|---|---|---|
-| `graphql-extension-websites-administrator` | `/` (server role) | `jcr:read_default`, `graphqlAdminMutation`, `websitesAdmin` | Reach the websites API. Does **not** grant site deletion |
+| `graphql-extension-websites-administrator` | `/` (server role) | `jcr:read_default`, `graphqlAdminMutation`, `websitesAdmin`, `websitesCreate`, `websitesExport`, `websitesExportAll` | Full lifecycle **except deletion** |
 | `graphql-extension-websites-site-administrator` | `/sites/<siteKey>` (site role) | `websitesDelete` | Delete **that** site. Grant per site, in addition to the server role |
+
+### Delegating a narrower subset
+
+Each operation has its own permission, so you are not limited to the shipped role.  To let
+someone create sites without also granting them a bulk instance export, build a custom
+server role carrying only what they need:
+
+| Permission | Grants |
+|---|---|
+| `websitesCreate` | `createSiteByKey` |
+| `websitesExport` | `exportWebsite` |
+| `websitesExportAll` | `exportAllSites` |
+| `websitesAdmin` | Reaches `deleteSiteByKey` and `importWebsite`, whose real gates are in the method body |
+| `websitesDelete` | `deleteSiteByKey`, **on the site it is granted on** |
+
+Any custom role also needs `jcr:read_default` and `graphqlAdminMutation` to traverse the
+`admin { jahia { ... } }` wrapper at all.
 
 `websitesDelete` is deliberately **absent** from the server role.  JCR permissions inherit
 down the tree, so granting it at `/` would satisfy the per-site check on every site and make

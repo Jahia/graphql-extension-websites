@@ -22,7 +22,7 @@ Jahia OSGi module that extends the GraphQL admin API with site lifecycle operati
 
 ## GraphQL API
 
-All mutations live under the `websites` namespace container on `GqlJahiaAdminMutation`, i.e. the GraphQL path is `admin.jahia.websites.<operation>` (a flat `admin.jahia.<operation>` path does NOT resolve). Permission: `websitesAdmin` on every mutation via `@GraphQLRequiresPermission("websitesAdmin")`. `importWebsite` additionally requires full server-administrator rights (`admin` at the repository root) because it imports users and roles (SEC-136).
+All mutations live under the `websites` namespace container on `GqlJahiaAdminMutation`, i.e. the GraphQL path is `admin.jahia.websites.<operation>` (a flat `admin.jahia.<operation>` path does NOT resolve). Each mutation carries its **own** permission via `@GraphQLRequiresPermission` — see the permission model table below. `importWebsite` additionally requires full server-administrator rights (`admin` at the repository root) because it imports users and roles, and `deleteSiteByKey` additionally requires `websitesDelete` on the target site (both SEC-136).
 
 | Mutation | Signature | Notes |
 |----------|-----------|-------|
@@ -87,7 +87,24 @@ site on the instance.
 
 ### Permission model (do not "simplify")
 
-Two permissions, both children of `admin`, and the shape is load-bearing:
+Five permissions, all children of `admin`. Each mutation carries its own so operations are
+independently delegable:
+
+| Mutation | Annotation (checked at `/`) | In-body gate |
+|---|---|---|
+| `createSiteByKey` | `websitesCreate` | — |
+| `exportWebsite` | `websitesExport` | — |
+| `exportAllSites` | `websitesExportAll` | — |
+| `deleteSiteByKey` | `websitesAdmin` | `websitesDelete` **on the target site** |
+| `importWebsite` | `websitesAdmin` | `admin` at `/` |
+
+**Never change `deleteSiteByKey`'s annotation to `websitesDelete`.** It reads like an obvious
+consistency fix and is the most dangerous edit in the file: the annotation is evaluated at the
+repository root, where `websitesDelete` is deliberately never granted, so the change would deny
+every site-scoped holder before the body ran — while *looking* stricter. Pinned by
+`WebsitesAdminMutationPermissionAnnotationTest`.
+
+The shape of the permission tree is equally load-bearing:
 
 - `websitesDelete` is a **sibling** of `websitesAdmin`, never nested under it. Jahia registers
   nested permission nodes as **aggregated sub-privileges** (`JahiaPrivilegeRegistry` →

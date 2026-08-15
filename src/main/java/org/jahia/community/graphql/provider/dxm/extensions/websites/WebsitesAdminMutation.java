@@ -55,12 +55,29 @@ import java.util.*;
  * GraphQL mutation extensions for Jahia website lifecycle operations (create, delete,
  * export, import, bulk export-to-S3).
  *
- * <p><b>Permission:</b> every mutation in this class is gated by the
- * {@code websitesAdmin} permission via {@link GraphQLRequiresPermission}.  The caller
- * must hold that permission; unauthenticated or insufficiently privileged requests are
- * rejected by the GraphQL security layer before the method body executes.
+ * <p><b>Permissions.</b> Each mutation is gated by its own permission via
+ * {@link GraphQLRequiresPermission}, so an operator can delegate one operation without
+ * delegating the others.  Unauthenticated or insufficiently privileged requests are rejected
+ * by the GraphQL security layer before the method body executes.
  *
- * <p><b>That annotation is a coarse gate, not an authorization model.</b> The provider
+ * <table border="1">
+ *   <caption>Permission per mutation</caption>
+ *   <tr><th>Mutation</th><th>Annotation (checked at {@code /})</th><th>Additional in-body gate</th></tr>
+ *   <tr><td>{@link #createSiteByKey}</td><td>{@code websitesCreate}</td><td>—</td></tr>
+ *   <tr><td>{@link #exportWebsite}</td><td>{@code websitesExport}</td><td>—</td></tr>
+ *   <tr><td>{@link #exportAllSites()}</td><td>{@code websitesExportAll}</td><td>—</td></tr>
+ *   <tr><td>{@link #deleteSiteByKey}</td><td>{@code websitesAdmin}</td><td>{@code websitesDelete} <em>on the target site</em></td></tr>
+ *   <tr><td>{@link #importWebsite}</td><td>{@code websitesAdmin}</td><td>{@code admin} at the repository root</td></tr>
+ * </table>
+ *
+ * <p><b>Why {@code deleteSiteByKey} and {@code importWebsite} keep the coarse
+ * {@code websitesAdmin} annotation.</b> Their real authorization lives in the method body, and
+ * neither can be expressed at the annotation level.  For deletion in particular the annotation
+ * <em>must not</em> be {@code websitesDelete}: that permission is deliberately never granted at
+ * the repository root, so annotating it would deny the site-scoped holder before the body could
+ * run — breaking exactly the delegation the check exists to enable.
+ *
+ * <p><b>An annotation is a coarse gate, not an authorization model.</b> The provider
  * evaluates it against the <em>repository root</em> ({@code GqlJcrPermissionChecker} resolves
  * the annotation's optional path, defaulting to {@code "/"}), so it answers only "may this
  * caller reach the websites API at all". It cannot express a per-target rule, because the
@@ -147,7 +164,7 @@ public class WebsitesAdminMutation {
      */
     @GraphQLField
     @GraphQLDescription("Create a website")
-    @GraphQLRequiresPermission("websitesAdmin")
+    @GraphQLRequiresPermission("websitesCreate")
     public Boolean createSiteByKey(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("serverName") @GraphQLDescription("Server name") String serverName,
@@ -363,7 +380,7 @@ public class WebsitesAdminMutation {
     @GraphQLField
     @GraphQLDescription("Export a website")
     @GraphQLAsync
-    @GraphQLRequiresPermission("websitesAdmin")
+    @GraphQLRequiresPermission("websitesExport")
     public Boolean exportWebsite(
             @GraphQLName("siteKey") @GraphQLDescription("Site key") String siteKey,
             @GraphQLName("exportPath") @GraphQLDescription("Export path") String exportPath,
@@ -730,7 +747,7 @@ public class WebsitesAdminMutation {
     @GraphQLDescription("Export all sites to the configured S3 bucket. Returns AWS_S3_BUCKET_NOT_CONFIGURED "
             + "(without exporting) when S3 configuration is incomplete; raises a GraphQL error for any "
             + "unexpected export or upload failure.")
-    @GraphQLRequiresPermission("websitesAdmin")
+    @GraphQLRequiresPermission("websitesExportAll")
     public ExportAllSitesResults exportAllSites() {
         GraphQLWebsitesConfig websitesConfig = BundleUtils.getOsgiService(GraphQLWebsitesConfig.class, null);
 

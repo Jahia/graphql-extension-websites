@@ -17,12 +17,12 @@
     <graphql-extension-websites-administrator jcr:primaryType="jnt:role"
                                               j:nodeTypes="rep:root"
                                               j:roleGroup="server-role"
-                                              j:permissionNames="jcr:read_default graphqlAdminMutation websitesAdmin"
+                                              j:permissionNames="jcr:read_default graphqlAdminMutation websitesAdmin websitesCreate websitesExport websitesExportAll"
                                               j:privilegedAccess="true">
         <j:translation_en jcr:primaryType="jnt:translation"
                           jcr:language="en"
                           jcr:title="GraphQL Extension Websites administrator"
-                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, export, import) without requiring full server administrator rights. Does NOT grant site deletion: to delegate deletion of a specific site, grant the 'GraphQL Extension Websites site administrator' role on that site."/>
+                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, export, import) without requiring full server administrator rights. Does NOT grant site deletion: to delegate deletion of a specific site, grant the 'GraphQL Extension Websites site administrator' role on that site. To delegate a narrower subset, build a custom role from the individual websitesCreate / websitesExport / websitesExportAll permissions instead of granting this one."/>
     </graphql-extension-websites-administrator>
 
     <graphql-extension-websites-site-administrator jcr:primaryType="jnt:role"
