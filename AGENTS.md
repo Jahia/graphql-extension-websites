@@ -32,7 +32,7 @@ All mutations live under the `websites` namespace container on `GqlJahiaAdminMut
 | `importWebsite` | `(importPath, siteKey)` → Boolean | Path relative to `jahiaImportsDiskPath`; reads `export.properties` |
 | `exportAllSites` | `()` → `ExportAllSitesResults` | Exports to `jahiaVarDiskPath/exports/export-{timestamp}.zip`, then uploads to S3 |
 
-`ExportAllSitesResults` enum: `SUCCESS`, `AWS_S3_BUCKET_NOT_CONFIGURED`. `exportAllSites` throws `DataFetchingException` on unexpected error rather than returning a failure value — this two-channel split is **deliberate**: the enum carries expected, operator-actionable outcomes; exceptions carry unexpected failures whose cause must survive for diagnosis. `ExportAllSitesResults` is an actionable-outcome enum, not a general error enum — only add a constant for something an operator can remedy.
+`ExportAllSitesResults` enum: `SUCCESS`, `AWS_S3_BUCKET_NOT_CONFIGURED`, `NOT_SERVER_ADMINISTRATOR`. `exportAllSites` throws `DataFetchingException` on unexpected error rather than returning a failure value — this two-channel split is **deliberate**: the enum carries expected, operator-actionable outcomes; exceptions carry unexpected failures whose cause must survive for diagnosis. `ExportAllSitesResults` is an actionable-outcome enum, not a general error enum — only add a constant for something an operator can remedy.
 
 ## S3 Upload Configuration
 
@@ -73,7 +73,8 @@ The three mutations use three different privilege scopes. This is by design — 
 
 | Mutation | Runs as | Why |
 |---|---|---|
-| `exportWebsite`, `exportAllSites` | caller | An export degrades gracefully — fewer rights just means a smaller archive, so de-escalating costs nothing (SEC-136) |
+| `exportWebsite` | caller, **target-scoped** | Requires `websitesExport` **on the site node**, checked in the caller's own session (§4.3). Relying on the session read-bound alone would make security depend on ACLs lining up and would still write a misleading near-empty archive |
+| `exportAllSites` | caller, **server admin only** | Instance-wide, so gated on `admin` at `/` (§4.3). A read-bounded bulk export yields a partial backup that looks complete — worse than a refusal. Returns `NOT_SERVER_ADMINISTRATOR` |
 | `createSiteByKey` | **system session** | Load-bearing, **do not remove**. Writing `/sites/<siteKey>` needs rights on `/sites` that a delegated `websitesAdmin` holder lacks; a caller-scoped session would fail for exactly the non-admin users the permission exists to serve. The escalation *is* the delegation mechanism |
 | `deleteSiteByKey` | caller, **target-scoped** | Requires `websitesDelete` **on the site node itself**, checked in the caller's own session (SEC-136). Deletion cannot degrade gracefully, so neither de-escalation nor a global second gate fits |
 | `importWebsite` | system session **+ second gate** | Imports users and roles, which no de-escalation can bound, so it additionally requires full `admin` at the repository root (SEC-136) |
@@ -93,16 +94,21 @@ independently delegable:
 | Mutation | Annotation (checked at `/`) | In-body gate |
 |---|---|---|
 | `createSiteByKey` | `websitesCreate` | — |
-| `exportWebsite` | `websitesExport` | — |
-| `exportAllSites` | `websitesExportAll` | — |
+| `exportWebsite` | `websitesAdmin` | `websitesExport` **on the target site** |
+| `exportAllSites` | `websitesExportAll` | `admin` at `/` |
 | `deleteSiteByKey` | `websitesAdmin` | `websitesDelete` **on the target site** |
 | `importWebsite` | `websitesAdmin` | `admin` at `/` |
 
-**Never change `deleteSiteByKey`'s annotation to `websitesDelete`.** It reads like an obvious
-consistency fix and is the most dangerous edit in the file: the annotation is evaluated at the
-repository root, where `websitesDelete` is deliberately never granted, so the change would deny
-every site-scoped holder before the body ran — while *looking* stricter. Pinned by
-`WebsitesAdminMutationPermissionAnnotationTest`.
+**Never point a target-scoped mutation's annotation at its fine permission** — not
+`deleteSiteByKey` → `websitesDelete`, not `exportWebsite` → `websitesExport`. Both read like
+obvious consistency fixes and are the most dangerous edits in the file: the annotation is
+evaluated at the repository root, where those permissions are deliberately never granted, so the
+change denies every site-scoped holder before the body runs — while *looking* stricter.
+
+Nor can you "fix" that by adding them to the root-granted server role: JCR permissions inherit
+downward, so a root grant satisfies the in-body per-site check on every site and makes it
+vacuous. Coarse annotation + fine in-body check is the only combination that works. Both are
+pinned by `WebsitesAdminMutationPermissionAnnotationTest`.
 
 The shape of the permission tree is equally load-bearing:
 
