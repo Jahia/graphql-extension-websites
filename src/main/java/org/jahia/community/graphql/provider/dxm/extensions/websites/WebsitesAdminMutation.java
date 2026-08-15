@@ -39,6 +39,7 @@ import software.amazon.awssdk.transfer.s3.S3TransferManager;
 import software.amazon.awssdk.transfer.s3.SizeConstant;
 import software.amazon.awssdk.transfer.s3.progress.LoggingTransferListener;
 
+import javax.jcr.PathNotFoundException;
 import javax.jcr.RepositoryException;
 import javax.xml.transform.TransformerException;
 import java.io.*;
@@ -59,13 +60,25 @@ import java.util.*;
  * must hold that permission; unauthenticated or insufficiently privileged requests are
  * rejected by the GraphQL security layer before the method body executes.
  *
+ * <p><b>That annotation is a coarse gate, not an authorization model.</b> The provider
+ * evaluates it against the <em>repository root</em> ({@code GqlJcrPermissionChecker} resolves
+ * the annotation's optional path, defaulting to {@code "/"}), so it answers only "may this
+ * caller reach the websites API at all". It cannot express a per-target rule, because the
+ * annotation's path is static while the target arrives as a runtime argument. Any mutation
+ * that acts on a <em>specific</em> site must therefore carry its own target-scoped check in
+ * the method body — {@link #deleteSiteByKey} does, and the absence of one there was SEC-136.
+ *
  * <p><b>Privilege scope of {@link #exportAllSites()} (SEC-136):</b> that mutation runs
  * the JCR export under the <em>caller's own</em> session — it does <b>not</b> escalate to
- * the root user. The archive is therefore confined to the content the caller is authorized
- * to read; a {@code websitesAdmin} holder cannot use it to exfiltrate content they cannot
- * otherwise access. See the README for S3 configuration details.
+ * the root user, so the archive is bounded by what that session may read. Note what this does
+ * and does not promise: it bounds the export by the <em>caller's read rights</em>, which is
+ * only a meaningful confinement if those rights are themselves narrow. The
+ * {@code graphql-extension-websites-administrator} role shipped by this module grants
+ * {@code jcr:read_default} at the repository root, so for a holder of <em>that</em> role the
+ * bound is the whole repository. Do not read the de-escalation as a confidentiality guarantee
+ * for the shipped role. See the README for S3 configuration details.
  *
- * <p><b>Why the privilege scopes differ between mutations.</b> The three tiers below are
+ * <p><b>Why the privilege scopes differ between mutations.</b> The tiers below are
  * deliberate, not an inconsistency — each reflects whether the operation can degrade safely
  * when it is denied rights:
  * <ul>
@@ -85,6 +98,14 @@ import java.util.*;
  *   <li>{@link #importWebsite} needs system rights <em>and</em> imports users and roles, which
  *       no de-escalation can bound. It therefore carries a second, explicit gate requiring full
  *       server-administrator rights on top of {@code websitesAdmin} (SEC-136).</li>
+ *   <li>{@link #deleteSiteByKey} is <em>target-scoped</em>: it additionally requires
+ *       {@code websitesDelete} on the site being deleted, checked in the caller's own session.
+ *       Deletion cannot degrade gracefully — it either destroys the site or does not — so
+ *       neither de-escalation (the export tier) nor a global second gate (the import tier)
+ *       fits. The permission is granted per site through the
+ *       {@code graphql-extension-websites-site-administrator} role, and is deliberately absent
+ *       from the root-granted server role, since a root grant would inherit down to every site
+ *       and make the check vacuous.</li>
  * </ul>
  */
 @GraphQLName("WebsitesAdminMutation")
@@ -112,6 +133,11 @@ public class WebsitesAdminMutation {
     private static final DateTimeFormatter EXPORT_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     /** Hex characters of randomness appended to an export file name to make it unique. */
     private static final int EXPORT_SUFFIX_LENGTH = 8;
+    /**
+     * Target-scoped permission required to delete a site (SEC-136). Checked against the site
+     * node itself, not the repository root — see {@link #callerMayDeleteSite(JahiaSite)}.
+     */
+    private static final String WEBSITES_DELETE_PERMISSION = "websitesDelete";
 
     /**
      * Creates a Jahia website with the supplied parameters.
@@ -161,6 +187,20 @@ public class WebsitesAdminMutation {
     /**
      * Deletes the Jahia website identified by {@code siteKey}.
      *
+     * <p><b>Authorization (SEC-136).</b> The class-level {@code websitesAdmin} annotation is
+     * evaluated at the repository root and therefore only answers "may this caller reach the
+     * websites API at all" — it says nothing about <em>which</em> site may be destroyed. Until
+     * 2.1.0 that was the only gate, so any holder of the delegated
+     * {@code graphql-extension-websites-administrator} role could delete <em>any</em> site on
+     * the instance, including sites it never created and held no rights on.
+     *
+     * <p>This method therefore performs a second, target-scoped check: the caller must hold
+     * {@code websitesDelete} <em>on the site node itself</em>, evaluated in the caller's own
+     * session (see {@link #callerMayDeleteSite(JahiaSite)}). Note that no such check is implied
+     * anywhere below us — {@code JahiaSitesService.removeSite} performs the deletion under
+     * {@code doExecuteWithSystemSession}, so the caller's rights are never consulted by Jahia
+     * and this check is the only thing standing between a caller and site destruction.
+     *
      * <p>Only {@link JahiaException} — the domain failure {@code removeSite} declares — is
      * translated to {@code false}. Unchecked exceptions propagate to the GraphQL layer rather
      * than being reported as an ordinary "deletion failed", matching how
@@ -168,8 +208,8 @@ public class WebsitesAdminMutation {
      * The previous {@code catch (JahiaException | RuntimeException)} conflated the two, so a
      * bug such as an NPE was indistinguishable from a site that genuinely could not be deleted.
      *
-     * @return {@code true} on success; {@code false} if the site was not found or deletion
-     *         fails
+     * @return {@code true} on success; {@code false} if the site was not found, the caller is
+     *         not authorized to delete it, or deletion fails
      * @throws RuntimeException if deletion fails unexpectedly (not a domain-level failure)
      */
     @GraphQLField
@@ -187,12 +227,60 @@ public class WebsitesAdminMutation {
                 LOGGER.error("Impossible to delete website '{}': site not found", siteKey);
                 return Boolean.FALSE;
             }
+            if (!callerMayDeleteSite(jahiaSite)) {
+                LOGGER.warn("Refusing to delete website '{}': caller lacks the '{}' permission on that site",
+                        siteKey, WEBSITES_DELETE_PERMISSION);
+                return Boolean.FALSE;
+            }
             jahiaSitesServices.removeSite(jahiaSite);
             success = Boolean.TRUE;
         } catch (JahiaException ex) {
             LOGGER.error(ERR_MSG_IMP_TO_DELETE_SITE, siteKey, ex);
         }
         return success;
+    }
+
+    /**
+     * Answers whether the current caller may delete {@code site}, by checking the
+     * {@code websitesDelete} permission against the site's own JCR node.
+     *
+     * <p>Three properties of this check are load-bearing and must survive refactoring:
+     *
+     * <ul>
+     *   <li><b>The caller's session, never a system session.</b> Resolving the node through
+     *       {@code doExecuteWithSystemSession} would re-ask the question with the wrong subject
+     *       and always answer "yes".</li>
+     *   <li><b>The site's own path, not a path built from the {@code siteKey} argument.</b>
+     *       {@link JahiaSite#getJCRLocalPath()} is repository-derived, so no untrusted input is
+     *       concatenated into a JCR path here.</li>
+     *   <li><b>Fail closed.</b> A caller who cannot even see the node gets
+     *       {@link PathNotFoundException}, which is indistinguishable from "not authorized" and
+     *       is treated as such — the same convention the GraphQL provider itself uses in
+     *       {@code GqlJcrPermissionChecker}.</li>
+     * </ul>
+     *
+     * <p>Server administrators are covered without a special case: {@code websitesDelete} is
+     * declared as a child of the {@code admin} permission, and Jahia registers nested permission
+     * nodes as aggregated sub-privileges, so holding {@code admin} at the root implies it.
+     *
+     * @return {@code true} only if the permission is positively held on the target site
+     */
+    private static boolean callerMayDeleteSite(JahiaSite site) {
+        final String sitePath = site.getJCRLocalPath();
+        try {
+            return JCRSessionFactory.getInstance().getCurrentUserSession()
+                    .getNode(sitePath)
+                    .hasPermission(WEBSITES_DELETE_PERMISSION);
+        } catch (PathNotFoundException ex) {
+            // The caller cannot see the site at all. Deny — invisible and unauthorized are the
+            // same answer here, and distinguishing them would leak site existence.
+            LOGGER.warn("Denying deletion of '{}': the caller cannot resolve that site", sitePath);
+            return false;
+        } catch (RepositoryException ex) {
+            LOGGER.error("Denying deletion of '{}': unable to verify the '{}' permission",
+                    sitePath, WEBSITES_DELETE_PERMISSION, ex);
+            return false;
+        }
     }
 
     /**

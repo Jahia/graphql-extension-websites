@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SEC-136. The server role below deliberately does NOT carry `websitesDelete`.
+
+  It is granted at the JCR root, and JCR permissions inherit down the tree, so any permission
+  listed here is held on every node — including every site. Adding `websitesDelete` here would
+  make the per-site check in deleteSiteByKey pass everywhere and reinstate the vulnerability.
+
+  Site deletion is delegated instead through `graphql-extension-websites-site-administrator`,
+  which is granted per site on /sites/<siteKey>.
+-->
 <roles jcr:primaryType="jnt:roles"
        xmlns:jcr="http://www.jcp.org/jcr/1.0"
        xmlns:j="http://www.jahia.org/jahia/1.0"
@@ -12,6 +22,17 @@
         <j:translation_en jcr:primaryType="jnt:translation"
                           jcr:language="en"
                           jcr:title="GraphQL Extension Websites administrator"
-                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, delete, export, import) without requiring full server administrator rights"/>
+                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, export, import) without requiring full server administrator rights. Does NOT grant site deletion: to delegate deletion of a specific site, grant the 'GraphQL Extension Websites site administrator' role on that site."/>
     </graphql-extension-websites-administrator>
+
+    <graphql-extension-websites-site-administrator jcr:primaryType="jnt:role"
+                                                   j:nodeTypes="jnt:virtualsite"
+                                                   j:roleGroup="site-role"
+                                                   j:permissionNames="websitesDelete"
+                                                   j:privilegedAccess="true">
+        <j:translation_en jcr:primaryType="jnt:translation"
+                          jcr:language="en"
+                          jcr:title="GraphQL Extension Websites site administrator"
+                          jcr:description="Grants deletion of the site this role is granted on, through the deleteSiteByKey GraphQL mutation. Grant it per site; the holder also needs the server-level 'GraphQL Extension Websites administrator' role to reach the API."/>
+    </graphql-extension-websites-site-administrator>
 </roles>

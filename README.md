@@ -8,11 +8,67 @@ The purpose of this module is to allow the creation, deletion, import and export
 hold this permission will have their request rejected by the GraphQL security layer before
 any operation is attempted.
 
-Note that `exportAllSites` runs the export under the **calling user's own** JCR session
-(SEC-136) — it does **not** escalate to root.  The resulting archive is confined to the
-content the caller is authorized to read, so a `websitesAdmin` holder cannot use it to
-capture content beyond their own read rights.  `importWebsite` additionally requires full
-server-administrator rights (it imports users and roles), not merely `websitesAdmin`.
+`websitesAdmin` is a **coarse gate**: it is evaluated against the repository root and answers
+only "may this caller reach the websites API at all".  It is not a per-site authorization —
+mutations that act on a specific site carry their own target-scoped check.
+
+### Reach of each mutation
+
+| Mutation | Required to succeed | Reach |
+|---|---|---|
+| `createSiteByKey` | `websitesAdmin` | Creates a new site. Runs under a system session — that escalation is the delegation mechanism (see below) |
+| `deleteSiteByKey` | `websitesAdmin` **and** `websitesDelete` **on the target site** | **Only sites the caller is authorized on.** Server administrators retain full reach |
+| `exportWebsite` | `websitesAdmin` | Runs as the caller; the archive is bounded by that session's read rights |
+| `exportAllSites` | `websitesAdmin` | Runs as the caller (SEC-136) — see the caveat below |
+| `importWebsite` | `websitesAdmin` **and** full server administrator (`admin` at `/`) | Instance-wide; imports users and roles |
+
+### Site deletion is scoped to the caller (SEC-136)
+
+Until 2.1.0, `deleteSiteByKey` was gated **only** by the root-evaluated `websitesAdmin`
+annotation, so any holder of the delegated `graphql-extension-websites-administrator` role
+could delete **any** site on the instance — including sites it never created and held no
+rights on.
+
+From 2.1.0 the mutation additionally requires the `websitesDelete` permission **on the site
+being deleted**, checked in the caller's own JCR session.  Grant it per site with the
+`graphql-extension-websites-site-administrator` role (see [Roles](#roles)).  Nothing below
+this check enforces it: `JahiaSitesService.removeSite` performs the deletion under a system
+session, so the caller's rights are never consulted by Jahia itself.
+
+### Caveat: what the `exportAllSites` de-escalation does and does not promise
+
+`exportAllSites` runs the export under the **calling user's own** JCR session (SEC-136) — it
+does **not** escalate to root, so the archive is bounded by what that session may read.
+
+That bound is only meaningful if the caller's read rights are themselves narrow.  The
+`graphql-extension-websites-administrator` role shipped by this module grants
+`jcr:read_default` at the repository root, so **for a holder of that role the bound is the
+whole repository** — all sites, `/users`, `/roles`.  Do not read the de-escalation as a
+confidentiality guarantee for the shipped role.  If you need a narrower bound, grant the
+module's permissions through a role with a narrower read grant.
+
+## Roles
+
+The module ships two roles:
+
+| Role | Granted at | Carries | Purpose |
+|---|---|---|---|
+| `graphql-extension-websites-administrator` | `/` (server role) | `jcr:read_default`, `graphqlAdminMutation`, `websitesAdmin` | Reach the websites API. Does **not** grant site deletion |
+| `graphql-extension-websites-site-administrator` | `/sites/<siteKey>` (site role) | `websitesDelete` | Delete **that** site. Grant per site, in addition to the server role |
+
+`websitesDelete` is deliberately **absent** from the server role.  JCR permissions inherit
+down the tree, so granting it at `/` would satisfy the per-site check on every site and make
+it vacuous.  For the same reason `websitesDelete` is declared as a **sibling** of
+`websitesAdmin` in `permissions.xml`, never nested beneath it — Jahia registers nested
+permission nodes as aggregated sub-privileges, so nesting would hand it back to every holder
+of the server role.
+
+Both permissions sit under `admin`, so a full server administrator aggregates both and keeps
+unrestricted site deletion without any special case in the code.
+
+> **Upgrading:** Jahia imports a module's initial JCR content **once per module version**.
+> These roles and permissions therefore land only on a version change — redeploying an
+> unchanged version will not import them.
 
 ## Installation
 
@@ -160,6 +216,13 @@ enum — only add a constant for something an operator can remedy.
   ZIP-slip check is performed here.  The mutation is gated by `websitesAdmin`, so only
   trusted administrators can trigger imports.
 - **`exportAllSites` privilege scope**: the export runs under the caller's own session
-  (SEC-136) and is confined to content the caller can read, so it is not an instance-wide
-  root dump.  Any further tightening of the required permission beyond `websitesAdmin` is
-  deferred.
+  (SEC-136), so it is not an instance-wide *root* dump.  It is, however, bounded only by the
+  caller's read rights, and the shipped `graphql-extension-websites-administrator` role grants
+  `jcr:read_default` at the repository root — so for a holder of that role the export still
+  covers the whole repository.  Narrowing that read grant would break delegated exports and is
+  deferred; see the caveat under [Permissions](#permissions).
+- **`createSiteByKey` privilege scope**: it runs under a system session, and that escalation
+  is load-bearing (writing `/sites/<siteKey>` needs rights on `/sites` that a delegated holder
+  lacks).  A holder can therefore create sites and enable any **already-installed** module on
+  them, but cannot install modules nor affect existing sites.  Unlike deletion, creation is not
+  target-scoped, because there is no pre-existing target node to scope against.
