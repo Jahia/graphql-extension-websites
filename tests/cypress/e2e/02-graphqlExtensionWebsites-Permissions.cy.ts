@@ -4,17 +4,22 @@ import {createUser, deleteUser, grantRoles} from '@jahia/cypress';
 /**
  * Regression tests for the fine-grained `websitesAdmin` permission.
  *
- * These guard against the gate being silently removed or mismatched across the stack:
- *  - Backend: every site-lifecycle mutation in `WebsitesMutation` is annotated with
- *    `@GraphQLRequiresPermission("websitesAdmin")`, enforced by the DXM provider as a
- *    `session.getNode("/").hasPermission("websitesAdmin")` (root-node ACL) check.
+ * These guard against the gates being silently removed or mismatched across the stack:
+ *  - Backend: each site-lifecycle mutation carries its OWN `@GraphQLRequiresPermission`,
+ *    enforced by the DXM provider as a `session.getNode("/").hasPermission(perm)` check
+ *    (root-node ACL):
+ *      • `createSiteByKey` → `websitesCreate`
+ *      • `exportWebsite`   → `websitesExport`
+ *      • `exportAllSites`  → `websitesExportAll`
+ *      • `deleteSiteByKey` → `websitesAdmin` (coarse; the real gate is the target-scoped
+ *        `websitesDelete` check inside the method — see the SEC-136 block below)
+ *      • `importWebsite`   → `websitesAdmin` (coarse; the real gate is the server-administrator
+ *        check inside the method)
  *  - RBAC content: the module ships the assignable `graphql-extension-websites-administrator`
  *    role (src/main/import/roles.xml). Because these mutations are nested under the DXM
- *    `admin { jahia { ... } }` wrapper, traversing to the gated field requires three
- *    fine-grained permissions in total (none of which is the `admin` role):
+ *    `admin { jahia { ... } }` wrapper, reaching a gated field also requires:
  *      • `jcr:read_default`     → satisfies the `admin` field's `@GraphQLRequiresPermission("jcr:read/jcr:system")`
  *      • `graphqlAdminMutation` → satisfies the `admin.jahia` field's `@GraphQLRequiresPermission("graphqlAdminMutation")`
- *      • `websitesAdmin`        → satisfies the mutation's own `@GraphQLRequiresPermission("websitesAdmin")`
  *    Omitting any one of them fails the gate on the corresponding field.
  *
  * This module is API-only (no admin UI), so only the GraphQL authorization is asserted.
@@ -32,6 +37,10 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
     const ROLE_NAME = 'graphql-extension-websites-administrator';
     const DENIED_USER = 'gewDeniedUser';
     const ALLOWED_USER = 'gewAllowedUser';
+    // Holds a custom role carrying websitesCreate but NOT websitesExportAll — the user that
+    // makes the per-operation permission split falsifiable.
+    const CREATE_ONLY_USER = 'gewCreateOnlyUser';
+    const CREATE_ONLY_ROLE = 'gew-test-create-only';
     const PASSWORD = 'GewPerm9PwdTest';
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -61,9 +70,18 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
         cy.login();
         createUser(DENIED_USER, PASSWORD);
         createUser(ALLOWED_USER, PASSWORD);
+        createUser(CREATE_ONLY_USER, PASSWORD);
         // The annotation resolves the permission on the JCR root node, so grant the
-        // module-shipped single-permission role on `/`.
+        // module-shipped role on `/`.
         grantRoles('/', [ROLE_NAME], ALLOWED_USER, 'USER');
+
+        // The shipped role carries every permission, so it cannot demonstrate that the
+        // per-operation split does anything. Build a deliberately narrow role instead.
+        cy.executeGroovy('createNarrowRole.groovy', {
+            __ROLE_NAME__: CREATE_ONLY_ROLE,
+            __PERMISSIONS__: 'websitesCreate'
+        });
+        grantRoles('/', [CREATE_ONLY_ROLE], CREATE_ONLY_USER, 'USER');
     });
 
     after(() => {
@@ -71,6 +89,7 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
         cy.login();
         deleteUser(DENIED_USER);
         deleteUser(ALLOWED_USER);
+        deleteUser(CREATE_ONLY_USER);
     });
 
     describe('GraphQL API authorization', () => {
@@ -122,6 +141,61 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
             expect(errorsOf(result), 'annotation gate is passed — no Permission denied').to.have.length(0);
             expect((result as {data: {admin: {jahia: {websites: {importWebsite: boolean}}}}}).data.admin.jahia.websites.importWebsite)
                 .to.eq(false);
+        });
+    });
+
+    // Per-operation permission split (advisory §4.2). Each mutation is gated by its own
+    // permission, so an operator can delegate one operation without delegating the others.
+    //
+    // The shipped `graphql-extension-websites-administrator` role carries all of them, so it
+    // proves nothing about the split — it would pass these gates whether or not they existed.
+    // These tests use a custom role carrying `websitesCreate` only. Both halves are needed:
+    // the allow half shows the narrow role is genuinely usable, and the deny half shows the
+    // other gates are not silently satisfied by it.
+    describe('operations are independently delegable', () => {
+        const CREATE_ONLY_SITE = 'gewCreateOnlySite';
+
+        afterEach(() => {
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({mutation: deleteSiteByKey, variables: {siteKey: CREATE_ONLY_SITE}});
+        });
+
+        it('allows createSiteByKey for a holder of websitesCreate alone', () => {
+            runAs(CREATE_ONLY_USER, createSiteByKey, {
+                siteKey: CREATE_ONLY_SITE,
+                serverName: `${CREATE_ONLY_SITE}.local`,
+                title: 'Create only',
+                templateSet: 'templates-system',
+                locale: 'en'
+            }).then((result: never) => {
+                expect(errorsOf(result), 'websitesCreate must be sufficient to create')
+                    .to.have.length(0);
+                expect((result as {data: {admin: {jahia: {websites: {createSiteByKey: boolean}}}}})
+                    .data.admin.jahia.websites.createSiteByKey).to.eq(true);
+            });
+        });
+
+        it('denies exportAllSites for that same holder — creation does not imply bulk export', () => {
+            exportAllSitesAs(CREATE_ONLY_USER).then((result: never) => {
+                const errs = errorsOf(result);
+                expect(errs, 'websitesCreate must NOT satisfy websitesExportAll')
+                    .to.have.length.greaterThan(0);
+                expect(errs.map((e: {message: string}) => e.message).join(' '))
+                    .to.contain('Permission denied');
+            });
+        });
+
+        it('denies exportWebsite for that same holder — creation does not imply site export', () => {
+            runAs(CREATE_ONLY_USER, exportWebsite, {
+                siteKey: 'systemsite', exportPath: 'create-only-export', onlyStaging: false
+            }).then((result: never) => {
+                const errs = errorsOf(result);
+                expect(errs, 'websitesCreate must NOT satisfy websitesExport')
+                    .to.have.length.greaterThan(0);
+                expect(errs.map((e: {message: string}) => e.message).join(' '))
+                    .to.contain('Permission denied');
+            });
         });
     });
 
