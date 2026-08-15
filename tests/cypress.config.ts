@@ -11,7 +11,11 @@ export default defineConfig({
     // first and the failure reads as an opaque "cy.request timed out" instead of the script's own
     // diagnostic. Keep this comfortably above the longest server-side deadline.
     responseTimeout: 180000,
-    // VideoUploadOnPasses: false,
+    // Not set: `videoUploadOnPasses` (a Cypress Cloud option). Videos of passing specs are removed
+    // by the `after:spec` hook below instead. Deliberately written as prose rather than as a
+    // commented-out `videoUploadOnPasses: false,` line: eslint's `capitalized-comments` autofix
+    // rewrites a bare key at the start of a comment to `VideoUploadOnPasses`, and uncommenting that
+    // yields an option Cypress does not recognise.
     reporter: 'cypress-multi-reporters',
     reporterOptions: {
         configFile: 'reporter-config.json'

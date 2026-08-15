@@ -45,7 +45,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code exportWebsite} pass everywhere — vacuous, and the original vulnerability is back.
  *       {@code jcr:read_default} is the same mistake in the confidentiality dimension: it is what
  *       made "the export is bounded by the caller's read rights" a claim about the entire
- *       repository (§4.3).</li>
+ *       repository (§4.3). Both roles are therefore pinned to an <b>allowlist</b> rather than a
+ *       denylist of the three known-bad names: the two invariants above interact, so the worst
+ *       single edit available is adding {@code admin} — an ancestor of all five permissions, hence
+ *       both a root grant of the target-scoped pair <em>and</em> a pass on the
+ *       {@code callerIsServerAdministrator()} gates — and no list of forbidden names would have
+ *       mentioned it.</li>
  * </ol>
  *
  * <p>These tests are cheap, need no container, and are the only thing in the repository that can
@@ -61,6 +66,18 @@ public class PermissionModelXmlTest {
     /** Target-scoped permissions: they must never be reachable from the repository root. */
     private static final List<String> TARGET_SCOPED_PERMISSIONS =
             Arrays.asList("websitesDelete", "websitesExport");
+
+    /**
+     * The <em>complete</em> set the root-granted server role may carry. This is an allowlist, not a
+     * denylist, and the difference is the whole point — see
+     * {@link #theServerRoleGrantsExactlyTheRootSafePermissions()}.
+     */
+    private static final String[] ROOT_SAFE_PERMISSIONS =
+            {"graphqlAdminMutation", "websitesAdmin", "websitesCreate", "websitesExportAll"};
+
+    /** The complete set the per-site role may carry. */
+    private static final String[] SITE_SCOPED_PERMISSIONS =
+            {"jcr:read_default", "websitesDelete", "websitesExport"};
 
     private static Document permissions;
     private static Document roles;
@@ -234,6 +251,44 @@ public class PermissionModelXmlTest {
                 .contains("graphqlAdminMutation", "websitesAdmin");
     }
 
+    /**
+     * The closed form of invariant (b), and the reason the two tests above are not enough on their
+     * own: they name the permissions that are known to be dangerous, so they can only catch a
+     * mistake someone has already thought of. An <em>allowlist</em> catches the ones nobody has.
+     *
+     * <p>The concrete hole this closes is {@code admin}. Adding it to this role's
+     * {@code j:permissionNames} passes every denylist assertion in this class — it is neither
+     * {@code websitesDelete}, nor {@code websitesExport}, nor {@code jcr:read_default} — while being
+     * strictly worse than all three combined. {@code admin} is the <em>parent</em> of all five
+     * permissions in {@code permissions.xml}, and Jahia registers nested permission nodes as
+     * aggregated sub-privileges, so a root grant of {@code admin} confers {@code websitesDelete} and
+     * {@code websitesExport} on every site <em>and</em> satisfies the {@code callerIsServerAdministrator()}
+     * in-body gate on {@code importWebsite} and {@code exportAllSites}. Every delegated holder of
+     * this role would become a server administrator.
+     *
+     * <p>So: nothing may be added here without changing this test, deliberately, with the
+     * aggregation rule above in mind. A new permission is root-safe only if it is checked at
+     * {@code /} and never against a specific target — a target-scoped permission belongs on the
+     * site role, where downward inheritance is bounded by the site it is granted on.
+     */
+    @Test
+    public void theServerRoleGrantsExactlyTheRootSafePermissions() {
+        Set<String> granted = permissionNamesOf(roleNamed(SERVER_ROLE));
+
+        assertThat(granted)
+                .as("'%s' is granted at '/', so this list is held on EVERY node of the repository. "
+                        + "It is an allowlist: if this failed because a permission was added, check "
+                        + "first whether that permission is ever evaluated against a specific target "
+                        + "— if it is, a root grant satisfies it everywhere and the check becomes "
+                        + "vacuous. Beware in particular of any ANCESTOR of the websites permissions: "
+                        + "they are all children of 'admin' and Jahia aggregates nested permission "
+                        + "nodes as sub-privileges, so granting 'admin' here hands out %s on every "
+                        + "site AND passes the callerIsServerAdministrator() gate on importWebsite "
+                        + "and exportAllSites. Target-scoped permissions belong on '%s'",
+                        SERVER_ROLE, TARGET_SCOPED_PERMISSIONS, SITE_ROLE)
+                .containsExactlyInAnyOrder(ROOT_SAFE_PERMISSIONS);
+    }
+
     // -------------------------------------------------------------------------
     // The site-scoped role is where the target-scoped permissions actually live
     // -------------------------------------------------------------------------
@@ -251,6 +306,26 @@ public class PermissionModelXmlTest {
                         + "per-site checks can never pass for anyone but a server administrator, "
                         + "and exportWebsite would produce an empty archive without site read")
                 .contains("websitesDelete", "websitesExport", "jcr:read_default");
+    }
+
+    /**
+     * The same allowlist shape as {@link #theServerRoleGrantsExactlyTheRootSafePermissions()},
+     * applied to the site role. The blast radius is smaller — this role is granted on one site, so
+     * inheritance stops at that subtree — but the {@code admin} trap still applies in miniature:
+     * {@code admin} on {@code /sites/&lt;siteKey&gt;} aggregates every websites permission there,
+     * turning a delegated site administrator into the holder of permissions this role was never
+     * reviewed to hand out. The permissions above are additive to the server role, which the holder
+     * needs as well to reach the API at all.
+     */
+    @Test
+    public void theSiteRoleGrantsExactlyTheSiteScopedPermissions() {
+        assertThat(permissionNamesOf(roleNamed(SITE_ROLE)))
+                .as("allowlist: '%s' is the delegation surface for a single site. Anything added "
+                        + "here is held on that whole site subtree, and an ancestor permission such "
+                        + "as 'admin' aggregates the websites permissions into it. Widen it only "
+                        + "deliberately, and never as a shortcut around a failing per-site check",
+                        SITE_ROLE)
+                .containsExactlyInAnyOrder(SITE_SCOPED_PERMISSIONS);
     }
 
     // -------------------------------------------------------------------------

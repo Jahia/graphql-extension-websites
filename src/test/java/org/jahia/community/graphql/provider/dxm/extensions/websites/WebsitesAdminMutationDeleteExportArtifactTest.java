@@ -1,5 +1,6 @@
 package org.jahia.community.graphql.provider.dxm.extensions.websites;
 
+import org.junit.After;
 import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
@@ -44,6 +45,38 @@ public class WebsitesAdminMutationDeleteExportArtifactTest {
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
+
+    /**
+     * Set only once a directory has actually been made read-only, so
+     * {@link #restoreWriteAccessOrFailLoudly()} knows there is something to undo.
+     */
+    private File lockedDir;
+
+    /**
+     * Gives write access back so {@link TemporaryFolder} can delete the tree, and fails the run
+     * loudly — naming the directory — if the JVM says it could not.
+     *
+     * <p><b>Why here and not in a {@code finally} block.</b> An assertion inside {@code finally}
+     * runs while the test's own exception is in flight and would <em>replace</em> it, hiding the
+     * real defect behind a cleanup complaint. JUnit 4 runs {@code @After} through
+     * {@code RunAfters}, which collects what is thrown here <em>alongside</em> the body's failure
+     * (a {@code MultipleFailureException}) instead of substituting it — so both are reported and
+     * neither is lost. The rule wraps the {@code @After}, so this still runs before the folder is
+     * deleted. Simply discarding the boolean, as this test used to, turns a failed restore into an
+     * opaque {@code TemporaryFolder} teardown error pointing at the wrong thing entirely.
+     */
+    @After
+    public void restoreWriteAccessOrFailLoudly() {
+        if (lockedDir == null) {
+            return;
+        }
+        File dir = lockedDir;
+        lockedDir = null;
+        if (!dir.setWritable(true, false)) {
+            throw new IllegalStateException("Could not restore write access to " + dir
+                    + "; TemporaryFolder cannot clean it up and later tests may see a stale tree");
+        }
+    }
 
     private static void deleteExportArtifact(Path path) throws Exception {
         Method method = WebsitesAdminMutation.class
@@ -105,26 +138,24 @@ public class WebsitesAdminMutationDeleteExportArtifactTest {
     @Test
     public void deleteExportArtifact_survivesAFailedDeleteWithoutThrowingOrRemovingAnything() throws Exception {
         // Arrange
-        File lockedDir = tmp.newFolder("read-only-exports");
-        File archive = new File(lockedDir, "export-stuck.zip");
+        File exportsDir = tmp.newFolder("read-only-exports");
+        File archive = new File(exportsDir, "export-stuck.zip");
         Files.write(archive.toPath(), "content".getBytes("UTF-8"));
         Assume.assumeFalse("Skipping: running as root, permission bits do not prevent unlink",
                 "root".equals(System.getProperty("user.name")));
         Assume.assumeTrue("Skipping: filesystem does not support a read-only directory",
-                lockedDir.setWritable(false, false));
+                exportsDir.setWritable(false, false));
+        // Registered only now that the bits really changed; restoreWriteAccessOrFailLoudly() undoes
+        // it whether this test passes, fails or throws — see that method for why not a finally.
+        lockedDir = exportsDir;
 
-        try {
-            // Act + Assert — the failure is logged, never propagated
-            assertThatCode(() -> deleteExportArtifact(archive.toPath()))
-                    .as("a cleanup failure must not fail the surrounding export mutation")
-                    .doesNotThrowAnyException();
-            assertThat(archive)
-                    .as("the artifact really was undeletable, so this exercised the warning branch "
-                            + "rather than the happy path")
-                    .exists();
-        } finally {
-            // Restore, or TemporaryFolder cannot clean up after the test.
-            lockedDir.setWritable(true, false);
-        }
+        // Act + Assert — the failure is logged, never propagated
+        assertThatCode(() -> deleteExportArtifact(archive.toPath()))
+                .as("a cleanup failure must not fail the surrounding export mutation")
+                .doesNotThrowAnyException();
+        assertThat(archive)
+                .as("the artifact really was undeletable, so this exercised the warning branch "
+                        + "rather than the happy path")
+                .exists();
     }
 }

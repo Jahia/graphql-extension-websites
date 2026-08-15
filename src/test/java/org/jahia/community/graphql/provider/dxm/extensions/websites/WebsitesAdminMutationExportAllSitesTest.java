@@ -39,9 +39,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * wrapper around the bulk export.
  *
  * <p><b>D5 — dead enum value removed (Stage 7).</b> The unreachable {@code ExportAllSitesResults.FAILURE}
- * constant was removed; {@code exportAllSites()} only ever returns {@code SUCCESS} or
- * {@code AWS_S3_BUCKET_NOT_CONFIGURED} (it throws {@link org.jahia.modules.graphql.provider.dxm.DataFetchingException}
- * on error). {@link #exportAllSitesResults_declaresReachableValuesOnly()} pins that closed set.
+ * constant was removed, leaving three reachable values: {@code NOT_SERVER_ADMINISTRATOR} (added in
+ * SEC-136 §4.3, and the <em>first</em> one the method can return — the administrator gate is checked
+ * before the S3 precondition), {@code AWS_S3_BUCKET_NOT_CONFIGURED} and {@code SUCCESS}. Anything
+ * unexpected is thrown as {@link org.jahia.modules.graphql.provider.dxm.DataFetchingException}
+ * rather than returned. {@link #exportAllSitesResults_declaresReachableValuesOnly()} pins that
+ * closed set.
  */
 public class WebsitesAdminMutationExportAllSitesTest {
 

@@ -34,7 +34,7 @@
         <j:translation_en jcr:primaryType="jnt:translation"
                           jcr:language="en"
                           jcr:title="GraphQL Extension Websites administrator"
-                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, export, import) without requiring full server administrator rights. Does NOT grant site deletion: to delegate deletion of a specific site, grant the 'GraphQL Extension Websites site administrator' role on that site. To delegate a narrower subset, build a custom role from the individual websitesCreate / websitesExport / websitesExportAll permissions instead of granting this one."/>
+                          jcr:description="Grants access to the website lifecycle GraphQL mutations (create, export, import) without requiring full server administrator rights. Does NOT grant deletion or export of a specific site: to delegate either, grant the 'GraphQL Extension Websites site administrator' role on that site. To delegate a narrower subset, build a custom role from graphqlAdminMutation plus websitesCreate, websitesExportAll and the coarse websitesAdmin gate - those are the only ones safe to grant at the repository root. Never grant websitesDelete or websitesExport at the root: they are checked against the target site and JCR permissions inherit downward, so a root grant satisfies that check on every site and lets the holder delete or export any site on the instance. See 'Delegating a narrower subset' in the README."/>
     </graphql-extension-websites-administrator>
 
     <graphql-extension-websites-site-administrator jcr:primaryType="jnt:role"

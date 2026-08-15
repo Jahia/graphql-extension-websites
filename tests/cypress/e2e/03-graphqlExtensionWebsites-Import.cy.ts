@@ -76,10 +76,16 @@ describe('GraphQL Extension Websites — importWebsite', () => {
 
         // Stage the export into the imports directory. The script also waits out the
         // @GraphQLAsync export, which returns before the tree is on disk.
+        //
+        // Nothing is pruned here: this spec IS the full round trip, so it deliberately stages —
+        // and imports — `users/` and `roles/` exactly as exportWebsite wrote them. The
+        // authorization spec (02) prunes them instead, because rewriting instance-wide /users and
+        // /roles is not a side effect an authorization test should have.
         cy.executeGroovy('stageImportTree.groovy', {
             __EXPORT_DIR__: EXPORT_DIR,
             __IMPORT_DIR__: IMPORT_DIR,
-            __SITE_KEY__: SITE_KEY
+            __SITE_KEY__: SITE_KEY,
+            __PRUNE_DIRS__: ''
         });
 
         // Remove the original so the import genuinely re-creates the site rather than

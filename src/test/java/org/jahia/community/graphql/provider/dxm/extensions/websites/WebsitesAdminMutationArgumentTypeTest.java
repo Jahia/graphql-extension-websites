@@ -85,6 +85,16 @@ public class WebsitesAdminMutationArgumentTypeTest {
      * {@code List} parameter is demonstrated rather than merely asserted: passing an
      * {@code ArrayList} where the method expects {@code String[]} is exactly what produces
      * {@code IllegalArgumentException: argument type mismatch}.
+     *
+     * <p><b>If only the message assertion below fails, this is not a regression.</b> "argument type
+     * mismatch" is the JDK's own wording for a reflective invocation with an incompatible argument
+     * ({@code jdk.internal.reflect}); it is not part of any contract this module controls, and a
+     * future JDK is free to reword it. It is asserted anyway because the exception type alone is
+     * too weak to characterize anything — {@code Method.invoke} also raises
+     * {@code IllegalArgumentException} for the wrong argument <em>count</em>, and a probe that
+     * accidentally drifted into that case would still pass a bare type check while demonstrating
+     * the wrong thing. On a reword, update the expected text; the defect is unchanged if the type
+     * assertion still holds.
      */
     @Test
     public void reflectiveInvokeRejectsAListWhereAnArrayIsDeclared() throws Exception {
@@ -93,7 +103,8 @@ public class WebsitesAdminMutationArgumentTypeTest {
         Probe probe = new Probe();
         List<String> value = new ArrayList<>(Arrays.asList("a", "b"));
 
-        // What graphql-java-annotations effectively did with String[]
+        // What graphql-java-annotations effectively did with String[]. The message text is the
+        // JDK's, not ours — see the javadoc above before treating a message-only failure as a bug.
         assertThatThrownBy(() -> arrayParam.invoke(probe, value))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("argument type mismatch");

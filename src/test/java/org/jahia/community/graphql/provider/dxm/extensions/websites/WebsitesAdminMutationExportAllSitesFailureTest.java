@@ -25,6 +25,7 @@ import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -104,9 +105,14 @@ public class WebsitesAdminMutationExportAllSitesFailureTest {
      *
      * <p>The failure injected here is the genuine one a container-free run hits: the export builds
      * its XSL path from {@code JahiaContextLoaderListener.getServletContext()}, which is
-     * {@code null} outside a servlet container, so the export NPEs before writing anything. What
+     * {@code null} outside a servlet container, so the export fails before writing anything. What
      * matters is not <em>which</em> exception occurs but that an arbitrary unchecked failure is
      * wrapped, and that its cause is preserved rather than flattened away.
+     *
+     * <p>The assertions below say exactly that and no more. Pinning the concrete cause type would
+     * pin an incidental property of running outside a container — add a null guard to that lookup
+     * and the failure becomes some other exception, breaking this test for a reason that has
+     * nothing to do with the two-channel contract it exists to protect.
      */
     @Test
     public void exportAllSites_wrapsAnUnexpectedFailureInADataFetchingException() throws Exception {
@@ -121,12 +127,20 @@ public class WebsitesAdminMutationExportAllSitesFailureTest {
             bundleUtils.when(() -> BundleUtils.getOsgiService(SettingsBean.class, null)).thenReturn(settings);
             factoryStatic.when(JCRSessionFactory::getInstance).thenReturn(sessionFactory);
 
-            // Act + Assert
-            assertThatThrownBy(() -> new WebsitesAdminMutation().exportAllSites())
+            // Act
+            Throwable thrown = catchThrowable(() -> new WebsitesAdminMutation().exportAllSites());
+
+            // Assert
+            assertThat(thrown)
                     .as("an unexpected failure must reach the GraphQL error channel, not be "
                             + "flattened into an ExportAllSitesResults constant")
-                    .isInstanceOf(DataFetchingException.class)
-                    .hasCauseInstanceOf(NullPointerException.class);
+                    .isInstanceOf(DataFetchingException.class);
+            assertThat(thrown.getCause())
+                    .as("the cause is the whole point of the exception channel: it is what survives "
+                            + "into the GraphQL error extensions and the log. Wrapping without a "
+                            + "cause discards the diagnosis just as thoroughly as returning an enum "
+                            + "constant would")
+                    .isNotNull();
         }
     }
 

@@ -7,9 +7,13 @@ import org.jahia.modules.graphql.provider.dxm.DXGraphQLExtensionsProvider;
 import org.jahia.modules.graphql.provider.dxm.admin.GqlJahiaAdminMutation;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,15 +80,52 @@ public class DXGraphQLExtensionWebsitesProviderTest {
                 .isTrue();
     }
 
+    /**
+     * The accessor must hand back a usable holder — returning {@code null} would build a valid
+     * schema whose every {@code admin.jahia.websites.*} field resolves to nothing.
+     *
+     * <p>Deliberately <em>not</em> asserted: that each call returns a distinct instance. The real
+     * concern is shared mutable state between requests, and that is pinned directly by
+     * {@link #theMutationHolderCarriesNoInstanceState()}. Because the holder has no instance state,
+     * returning a cached singleton would be a legitimate optimisation, and an identity assertion
+     * here would reject it while adding no safety of its own.
+     */
     @Test
     public void theContainerReturnsTheMutationHolder() {
         // Act
         WebsitesAdminMutation container = WebsitesMutation.websites();
 
-        // Assert — a fresh holder per call; the mutations themselves are stateless
-        assertThat(container).isNotNull();
-        assertThat(WebsitesMutation.websites())
-                .as("the accessor must not hand out shared mutable state between requests")
-                .isNotSameAs(container);
+        // Assert
+        assertThat(container)
+                .as("a null container makes every mutation under admin.jahia.websites unresolvable "
+                        + "while the schema still builds cleanly")
+                .isNotNull();
+    }
+
+    /**
+     * The property that makes the container safe to share across concurrent GraphQL requests,
+     * asserted as itself rather than through the proxy of instance identity: the holder declares no
+     * instance fields at all, so two requests resolving the same field cannot interfere.
+     *
+     * <p>Adding one — a cached {@code SettingsBean}, a per-call export path, a reused S3 client —
+     * would make the lifetime of the object suddenly load-bearing, and mutations are dispatched
+     * concurrently. If this fails, either drop the field or make the sharing model explicit before
+     * relaxing the test.
+     */
+    @Test
+    public void theMutationHolderCarriesNoInstanceState() {
+        List<String> instanceFields = Arrays.stream(WebsitesAdminMutation.class.getDeclaredFields())
+                .filter(field -> !Modifier.isStatic(field.getModifiers()))
+                // Coverage and mocking agents synthesise fields into the class; they are not state
+                // the module wrote and must not fail an otherwise-clean build.
+                .filter(field -> !field.isSynthetic())
+                .map(Field::getName)
+                .collect(Collectors.toList());
+
+        assertThat(instanceFields)
+                .as("the websites mutations are dispatched concurrently and the container is created "
+                        + "per field resolution; per-instance state would be shared or lost "
+                        + "depending on a lifetime nothing in the schema guarantees")
+                .isEmpty();
     }
 }

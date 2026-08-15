@@ -14,7 +14,8 @@
  *             therefore fails fast; only the passing case waits out the full settle window.
  *
  * Tokens replaced by the caller:
- *   __RELATIVE_PATH__  path to check, relative to {jahiaVarDiskPath} (e.g. exports/gew-export)
+ *   __RELATIVE_PATH__  path to check, relative to {jahiaVarDiskPath} (e.g. exports/gew-export);
+ *                      checked for substitution, NOT for shape — see the note below
  *   __MARKERS__        space-separated paths that must exist INSIDE it (PRESENT only; may be empty)
  *   __EXPECT__         PRESENT or ABSENT
  *   __TIMEOUT_MS__     poll budget in milliseconds
@@ -26,7 +27,22 @@
 import org.jahia.settings.SettingsBean
 
 def settings = SettingsBean.getInstance()
-def target = new File(new File(settings.getJahiaVarDiskPath()), '__RELATIVE_PATH__')
+def relativePath = '__RELATIVE_PATH__'
+
+// The ABSENT branch passes whenever the path does not exist — including when the token was never
+// substituted or was misspelled, which would turn the falsifiability control for "an unauthorized
+// export must not reach disk" into a permanently-green no-op. Prove the substitution happened.
+//
+// DELIBERATE ASYMMETRY, do not "fix" it: unlike cleanupExportImportDirs.groovy / deleteRole.groovy,
+// the path is NOT validated as a safe segment here. Those scripts DELETE; this one only reads, and
+// the path-confinement specs intentionally pass traversal strings ('../..') to assert the exporter
+// never wrote outside its base directory. Validating the path would reject exactly those cases.
+if (relativePath.contains('__') || relativePath.trim().isEmpty()) {
+    throw new IllegalArgumentException(
+            "Token __RELATIVE_PATH__ was not substituted (got '${relativePath}'); the assertion would pass vacuously")
+}
+
+def target = new File(new File(settings.getJahiaVarDiskPath()), relativePath)
 def markerNames = '__MARKERS__'.trim().isEmpty() ? [] : ('__MARKERS__'.trim().split('\\s+') as List)
 def expectation = '__EXPECT__'.trim()
 def deadline = System.currentTimeMillis() + Long.parseLong('__TIMEOUT_MS__'.trim())

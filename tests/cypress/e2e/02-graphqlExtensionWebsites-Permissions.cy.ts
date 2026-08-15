@@ -73,6 +73,9 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
     const CREATE_ONLY_ROLE = 'gew-test-create-only';
     const PASSWORD = 'GewPerm9PwdTest';
     const TEMPLATE_SET = 'templates-system';
+    // Used only by the anonymous-caller test, which bypasses cy.apollo because cy.apolloClient
+    // always attaches a Basic header (root by default) and so cannot express "no credentials".
+    const GRAPHQL_ENDPOINT = '/modules/graphql';
     // The import round trip reuses the template set spec 03 proves the exporter/importer pair
     // against, so a failure there is about authorization and not about the template set.
     const ROUNDTRIP_TEMPLATE_SET = 'default';
@@ -181,19 +184,45 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
             cy.clearAllCookies();
             cy.request({
                 method: 'POST',
-                url: '/modules/graphql',
+                url: GRAPHQL_ENDPOINT,
                 failOnStatusCode: false,
                 body: {query: print(exportAllSites)}
             }).then(response => {
-                // The load-bearing assertion is that the resolver never produced a value. Any of
-                // SUCCESS / AWS_S3_BUCKET_NOT_CONFIGURED / NOT_SERVER_ADMINISTRATOR would mean a
-                // guest got past the annotation gate. The transport shape (status code, error
-                // wording) is deliberately not asserted — it is not the security property.
+                const body = response.body as {
+                    data?: { admin?: unknown }
+                    errors?: Array<{ errorType?: string }>
+                };
+
+                // Two assertions, and neither is sufficient on its own.
+                //
+                // (1) The resolver produced no value. SUCCESS, AWS_S3_BUCKET_NOT_CONFIGURED or
+                //     NOT_SERVER_ADMINISTRATOR would each mean a guest cleared the annotation gate.
                 expect(
                     websitesResult(response.body, 'exportAllSites'),
                     `an anonymous caller must not reach the resolver (HTTP ${response.status})`
                 ).to.eq(undefined);
+
+                // (2) ...and it produced nothing BECAUSE it was refused, not because the request
+                //     never arrived. `websitesResult` optional-chains all four levels, so (1) alone
+                //     is equally satisfied by a 404, an HTML error page, a renamed endpoint or a
+                //     malformed body — it would pass while testing nothing. Only the GraphQL
+                //     security layer emits GqlAccessDeniedException, so this pins that the request
+                //     was parsed, routed to `admin`, and then denied.
+                //
+                //     A root positive control would be the obvious alternative. It does NOT work
+                //     here, and the reason is worth recording: cy.request's `auth` option sends
+                //     credentials only in response to a 401 challenge, while Jahia answers an
+                //     unauthorized GraphQL call with HTTP 200 and an in-body error. The challenge
+                //     never comes, the header is never sent, and root is refused exactly like a
+                //     guest — so the "control" fails without indicating anything about the product.
+                //     cy.apolloClient works because it sets the Authorization header outright.
+                expect(
+                    (body.errors ?? []).map(error => error.errorType),
+                    'the refusal must come from the GraphQL security layer, not from a broken request'
+                ).to.include('GqlAccessDeniedException');
+                expect(body.data?.admin ?? null, 'the admin container must not resolve').to.eq(null);
             });
+
             cy.login();
         });
     });
@@ -417,9 +446,10 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
     // arbitrary users AND roles. The shipped server role grants `websitesAdmin` but not `admin`,
     // so its holder passes the annotation and is then refused in the body.
     //
-    // The tree below is REAL: created, exported and staged as root, exactly like the spec 03
-    // round trip. Pointing this at a nonexistent path — as an earlier version did — makes the
-    // test unfalsifiable: with the gate deleted the mutation still returns false, because
+    // The tree below is REAL: created, exported and staged as root, like the spec 03 round trip
+    // but with the instance-wide `users/` and `roles/` snapshots pruned from the staged copy (see
+    // the before hook). Pointing this at a nonexistent path — as an earlier version did — makes
+    // the test unfalsifiable: with the gate deleted the mutation still returns false, because
     // readExportProperties hits FileNotFoundException and returns null. Spec 03 demonstrates that
     // itself, by getting the same "no error, false" out of root for a missing path.
     describe('importWebsite requires full server-administrator rights', () => {
@@ -442,10 +472,20 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
             // Moves the tree from {jahiaVarDiskPath}/exports to {jahiaImportsDiskPath} and waits
             // out the @GraphQLAsync export. Throws — and so fails this hook — if the export never
             // materialised, so the tests below can rely on the tree being importable.
+            //
+            // `users/` and `roles/` are pruned from the STAGED COPY. exportWebsite sets
+            // INCLUDE_USERS and INCLUDE_ROLES, so the tree carries an instance-wide snapshot of
+            // both, and the root import below would write it straight back over the live /users
+            // and /roles — mid-run, on a shared instance, with no cleanup. That is a side effect
+            // an AUTHORIZATION test has no business having, and it would silently couple this
+            // file to its own block order (invariant 1): the snapshot is taken after the fixture
+            // users and the custom role exist only by accident of where this describe sits.
+            // Nothing is lost — spec 03 covers the full round trip, users and roles included.
             cy.executeGroovy('stageImportTree.groovy', {
                 __EXPORT_DIR__: IMPORT_EXPORT_DIR,
                 __IMPORT_DIR__: IMPORT_STAGED_DIR,
-                __SITE_KEY__: IMPORT_SITE
+                __SITE_KEY__: IMPORT_SITE,
+                __PRUNE_DIRS__: 'users roles'
             });
 
             // Remove the source so an import genuinely re-creates the site; the read-back is what

@@ -200,8 +200,10 @@ mutation {
                 createSiteByKey(
                     siteKey: "SITE_KEY"
                     serverName: "SERVER_NAME"
+                    serverNameAliasesAsString: "ALIAS_1,ALIAS_2"
                     title: "SITE_TITLE"
                     templateSet: "TEMPLATE_SET"
+                    modulesToDeploy: ["MODULE_NAME"]
                     locale: "LOCALE"
                 )
             }
@@ -209,6 +211,13 @@ mutation {
     }
 }
 ```
+
+`modulesToDeploy` is of type `[String]` (a nullable list of nullable strings) and lists modules
+to enable on the new site. It accepts **already-installed** module names only — this mutation
+cannot install a module, that requires the module manager. Omit the argument (or pass `null`) to
+create the site with just its template set. `serverNameAliasesAsString` is a single
+comma-separated string, not a list, and may also be omitted.
+
 #### Deletion
 ```graphql
 mutation {
