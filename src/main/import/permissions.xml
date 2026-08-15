@@ -25,8 +25,9 @@
 
         <!-- Per-operation gates, each checked at "/" by @GraphQLRequiresPermission on its own
              mutation. Splitting these lets an operator delegate site creation without also
-             delegating a bulk instance export, and so on. These two are the only permissions
-             here that are safe to grant at the repository root. -->
+             delegating a bulk instance export, and so on. These two, together with the
+             `websitesAdmin` gate above, are the permissions that are safe to grant at the
+             repository root — and the only ones the shipped server role carries. -->
         <websitesCreate jcr:primaryType="jnt:permission"/>
         <websitesExportAll jcr:primaryType="jnt:permission"/>
 

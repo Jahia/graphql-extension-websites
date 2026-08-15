@@ -61,7 +61,10 @@ def pruneNames = pruneRaw.isEmpty() ? [] : (pruneRaw.split('\\s+') as List).coll
 // export.properties is written by the exporter, so treat it plus the per-site directory as the
 // completion marker.
 def marker = new File(source, 'export.properties')
-def siteDir = new File(source, '__SITE_KEY__')
+// Validated like the other tokens even though nothing is deleted through it: an unsubstituted or
+// wrong value simply never appears on disk, so the loop below would burn its full 120 s budget and
+// then fail with a message naming the literal token rather than the real problem.
+def siteDir = new File(source, safeSegment('__SITE_KEY__', 'site key'))
 def deadline = System.currentTimeMillis() + 120000L
 while (System.currentTimeMillis() < deadline && !(marker.isFile() && siteDir.isDirectory())) {
     Thread.sleep(500L)

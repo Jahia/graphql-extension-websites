@@ -26,7 +26,16 @@ import javax.jcr.PathNotFoundException
  *
  * Tokens: __ROLE_NAME__, __PERMISSIONS__ (space-separated permission names).
  */
-def roleName = '__ROLE_NAME__'
+// `Node.getNode(relPath)` and `Node.addNode(relPath)` both take a RELATIVE PATH, so `..` is a
+// legal segment: an unsubstituted or malformed value would walk out of /roles and remove or
+// create an arbitrary subtree under a SYSTEM session. Validate as a single safe path segment and
+// fail loudly — a guard that silently does not apply is worse than no guard. Same check as
+// deleteRole.groovy, which cleans up after this script.
+def roleName = '__ROLE_NAME__'.trim()
+if (!(roleName ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+    throw new IllegalArgumentException("createNarrowRole: refusing unsafe role name: '${roleName}'")
+}
+
 def permissions = '__PERMISSIONS__'.trim().split('\\s+') as List
 
 JCRTemplate.getInstance().doExecuteWithSystemSession({ JCRSessionWrapper session ->

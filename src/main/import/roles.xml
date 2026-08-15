@@ -20,6 +20,14 @@
   Read is now granted only where it is actually needed: on the site role, scoped to the site it
   is granted on, so exportWebsite produces a real archive for a site administrator and nothing
   for anyone else.
+
+  NOTE ON `jcr:description`: it is NOT imported. Verified on a live 8.2 instance — after this
+  file is imported, /roles/<role> carries only j:permissionNames, j:privilegedAccess, j:roleGroup,
+  j:nodeTypes, jcr:primaryType and jcr:uuid. The descriptions below are therefore developer
+  documentation in this file only; they never reach the repository and never appear in the roles
+  UI, which takes its labels from resource bundles (this module ships none). Keep them accurate
+  for the next maintainer reading this file, but do not rely on an operator ever seeing them —
+  operator-facing guidance belongs in README.md.
 -->
 <roles jcr:primaryType="jnt:roles"
        xmlns:jcr="http://www.jcp.org/jcr/1.0"

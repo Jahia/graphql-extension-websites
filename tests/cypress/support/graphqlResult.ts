@@ -58,10 +58,25 @@ export interface JcrData {
 
 const asOutcome = <T>(result: unknown): ApolloOutcome<T> => (result ?? {}) as ApolloOutcome<T>;
 
-/** GraphQL errors carried by either shape; never null, so `.length` is always safe. */
+/**
+ * GraphQL errors carried by either shape; never null, so `.length` is always safe.
+ *
+ * `networkError` is folded in deliberately. An ApolloError raised by a pure transport failure —
+ * connection refused, DNS failure, a proxy 502 — carries `graphQLErrors: []` (present but empty)
+ * and puts the detail in `networkError`. Because `??` only falls back on null/undefined, an
+ * earlier version returned `[]` for those, so an assertion of the form
+ * `expect(errorsOf(result)).to.have.length(0)` — which is exactly what "the annotation gate was
+ * passed" asserts — PASSED on a dropped connection. Every current call site pairs it with a value
+ * assertion that would fail anyway, but this is the shared primitive for the whole suite and the
+ * next caller should not inherit that hole.
+ */
 export const errorsOf = (result: unknown): ReadonlyArray<GraphQLErrorLike> => {
     const outcome = asOutcome<unknown>(result);
-    return outcome.graphQLErrors ?? outcome.errors ?? [];
+    const graphQLErrors = outcome.graphQLErrors ?? outcome.errors ?? [];
+    const networkError = (result as { networkError?: { message?: string } } | undefined)?.networkError;
+    return networkError ?
+        [...graphQLErrors, {message: `networkError: ${networkError.message ?? String(networkError)}`}] :
+        graphQLErrors;
 };
 
 /** All error messages joined, for `.to.contain('Permission denied')` style assertions. */

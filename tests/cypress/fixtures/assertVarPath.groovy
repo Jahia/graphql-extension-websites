@@ -34,9 +34,11 @@ def relativePath = '__RELATIVE_PATH__'
 // export must not reach disk" into a permanently-green no-op. Prove the substitution happened.
 //
 // DELIBERATE ASYMMETRY, do not "fix" it: unlike cleanupExportImportDirs.groovy / deleteRole.groovy,
-// the path is NOT validated as a safe segment here. Those scripts DELETE; this one only reads, and
-// the path-confinement specs intentionally pass traversal strings ('../..') to assert the exporter
-// never wrote outside its base directory. Validating the path would reject exactly those cases.
+// the path is NOT validated as a safe single segment here. Two reasons. First, those scripts DELETE
+// and this one only reads — it calls exists()/list() and nothing else, so a bad value cannot damage
+// anything. Second, callers legitimately pass MULTI-SEGMENT paths ('exports/gew-owned-export'), and
+// the single-segment regex the deleting scripts use would reject every one of them.
+// Only substitution is checked, because that is the failure that would make this control vacuous.
 if (relativePath.contains('__') || relativePath.trim().isEmpty()) {
     throw new IllegalArgumentException(
             "Token __RELATIVE_PATH__ was not substituted (got '${relativePath}'); the assertion would pass vacuously")

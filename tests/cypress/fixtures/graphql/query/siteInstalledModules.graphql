@@ -1,0 +1,16 @@
+# Reads back the modules actually deployed on a site.
+#
+# Without this, the `modulesToDeploy` specs assert only that createSiteByKey returned true and the
+# site node exists — both of which hold if the argument were discarded entirely (e.g. if
+# toModulesArray were changed to `return null`). The whole point of the 2.2.1 fix is that the
+# argument reaches SiteCreationInfo, so the e2e test that names that behaviour has to observe it.
+query SiteInstalledModules($path: String!) {
+    jcr(workspace: EDIT) {
+        nodeByPath(path: $path) {
+            uuid
+            property(name: "j:installedModules") {
+                values
+            }
+        }
+    }
+}

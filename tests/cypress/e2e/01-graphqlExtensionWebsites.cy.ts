@@ -29,6 +29,8 @@ describe('GraphQL Extension Websites', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const createSiteByKeyWithModules: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/createSiteByKeyWithModules.graphql');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const siteInstalledModules: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/query/siteInstalledModules.graphql');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const deleteSiteByKey: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/deleteSiteByKey.graphql');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const exportWebsite: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/exportWebsite.graphql');
@@ -126,6 +128,28 @@ describe('GraphQL Extension Websites', () => {
             .should('eq', true);
 
         expectSiteToExist(TEST_SITE_KEY, 'must exist after createSiteByKey with a populated module list');
+
+        // Read the modules back off the site. Asserting only "created: true" plus "the node
+        // exists" would pass even if the argument were discarded entirely — changing
+        // toModulesArray to `return null` breaks nothing either caller can see. Since carrying
+        // modulesToDeploy through to SiteCreationInfo IS the fix under test, observe it.
+        cy.apollo({
+            query: siteInstalledModules,
+            variables: {path: `/sites/${TEST_SITE_KEY}`},
+            errorPolicy: 'all'
+        }).then((result: unknown) => {
+            const values = (
+                result as {
+                    data?: { jcr?: { nodeByPath?: { property?: { values?: string[] } | null } | null } }
+                }
+            ).data?.jcr?.nodeByPath?.property?.values;
+
+            expect(values, `j:installedModules must be readable on /sites/${TEST_SITE_KEY}`).to.be.an('array');
+            expect(
+                values,
+                `'${OPTIONAL_MODULE}' was passed in modulesToDeploy and must be deployed on the site`
+            ).to.include(OPTIONAL_MODULE);
+        });
     });
 
     it('deletes a site via GraphQL and returns true', () => {
