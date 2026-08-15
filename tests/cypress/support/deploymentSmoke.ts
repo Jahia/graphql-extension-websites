@@ -19,12 +19,16 @@ const websitesApiSmoke: DocumentNode = require('graphql-tag/loader!../fixtures/g
 /**
  * Fails loudly when a module the fixtures depend on is not started on the instance under test.
  *
- * `expectedVersion` matters for this module specifically. `ci.build.sh` copies the freshly built
- * jar into `artifacts/` inside an `if [[ -e ../target ]]` with no `set -e`, so if the jar was
- * never built the copy is skipped and the run silently proceeds against whatever version the
- * Jahia image already carries. Asserting only "some version is started" cannot tell 2.2.1-SNAPSHOT
- * from 2.2.0 — which would let a run green-light the modulesToDeploy fix while testing a jar that
- * does not contain it.
+ * `expectedVersion` is OPT-IN and no caller passes it today — say so plainly rather than let the
+ * comment imply a guard that is switched on. The stale-jar hole it addresses is closed at source
+ * instead: `ci.build.sh` used to copy the module jar inside `if [[ -e ../target ]]` with no
+ * `set -e`, so a missing target directory (or one holding no SNAPSHOT jar) left the copy undone
+ * and the run silently proceeded against whatever version the Jahia image already carried. It now
+ * fails loudly, which is the better place to catch it.
+ *
+ * Pass a version here if you ever need belt-and-braces: asserting only "some version is started"
+ * cannot tell 2.2.1-SNAPSHOT from 2.2.0, so it would not notice a run green-lighting the
+ * modulesToDeploy fix against a jar that does not contain it.
  */
 export const expectModuleStarted = (moduleId: string, expectedVersion?: string): void => {
     getStartedModuleVersion(moduleId).then((version: string | undefined) => {

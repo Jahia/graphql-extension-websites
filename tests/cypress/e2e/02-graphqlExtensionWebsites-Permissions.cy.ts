@@ -16,9 +16,9 @@ import {
  *
  * These guard against the gates being silently removed or mismatched across the stack.
  *
- * Backend — every mutation carries its OWN `@GraphQLRequiresPermission`, enforced by the DXM
- * provider as a `session.getNode("/").hasPermission(perm)` check on the JCR root node, and three
- * of them carry a second, finer gate inside the method body:
+ * Backend — every mutation carries a `@GraphQLRequiresPermission`, enforced by the DXM provider
+ * as a `session.getNode("/").hasPermission(perm)` check on the JCR root node, and three of them
+ * carry a second, finer gate inside the method body:
  *
  *   | Mutation          | Annotation (at `/`) | In-body gate                        |
  *   |-------------------|---------------------|-------------------------------------|
@@ -28,11 +28,16 @@ import {
  *   | `deleteSiteByKey` | `websitesAdmin`     | `websitesDelete` on the target site |
  *   | `importWebsite`   | `websitesAdmin`     | `admin` at `/`                      |
  *
- * The annotation is NOT the same permission on every field — `createSiteByKey` and
- * `exportAllSites` have their own — and the two target-scoped mutations deliberately do not name
- * their fine permission in the annotation. It is evaluated at `/`, where `websitesExport` /
- * `websitesDelete` are never granted (they live on the site-scoped role), so naming them there
- * would deny every site administrator before the body ran.
+ * The annotations are NOT all distinct, and they are also NOT one shared check. `createSiteByKey`
+ * and `exportAllSites` each have a permission of their own; `deleteSiteByKey`, `exportWebsite` and
+ * `importWebsite` share the coarse `websitesAdmin` gate, so granting it to delegate one of the
+ * three opens the annotation gate on the other two as well — those three are separated by their
+ * in-body checks, not by the annotation.
+ *
+ * The two target-scoped mutations deliberately do not name their fine permission in the
+ * annotation. It is evaluated at `/`, where `websitesExport` / `websitesDelete` are never granted
+ * (they live on the site-scoped role), so naming them there would deny every site administrator
+ * before the body ran.
  *
  * RBAC content — the module ships the assignable `graphql-extension-websites-administrator`
  * (server) and `graphql-extension-websites-site-administrator` (site) roles in
@@ -227,10 +232,12 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
         });
     });
 
-    // The annotation gate fires on every mutation field, each with its own permission (see the
-    // table at the top of this file) — it is NOT one shared `websitesAdmin` check. A user holding
-    // no role at all is refused before any method body runs: `exportAllSites` is covered by the
-    // block above, the other four here.
+    // Every mutation field carries an annotation gate, but they are NOT all distinct: only
+    // `createSiteByKey` (websitesCreate) and `exportAllSites` (websitesExportAll) have a
+    // permission of their own; `deleteSiteByKey`, `exportWebsite` and `importWebsite` share the
+    // coarse `websitesAdmin` gate (see the table at the top of this file). What this block
+    // asserts holds either way: a user with no role at all is refused before any method body
+    // runs. `exportAllSites` is covered by the block above, the other four here.
     describe('every mutation is refused for a user with no role', () => {
         const DENIED_SITE = 'gewDeniedSite';
         const DENIED_EXPORT_DIR = 'gew-denied-export';
@@ -286,8 +293,11 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
         });
     });
 
-    // Per-operation permission split (advisory §4.2). Each mutation is gated by its own
-    // permission, so an operator can delegate one operation without delegating the others.
+    // Per-operation permission split (advisory §4.2). `createSiteByKey` and `exportAllSites` are
+    // the two mutations with a permission of their own, so an operator can delegate creation
+    // without also delegating a bulk instance export. That pair is what this block proves; the
+    // other three share `websitesAdmin` and are separated by their in-body checks instead, which
+    // the target-scoped blocks below cover.
     //
     // The shipped `graphql-extension-websites-administrator` role carries all of them, so it
     // proves nothing about the split — it would pass these gates whether or not they existed.

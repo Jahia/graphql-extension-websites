@@ -156,6 +156,21 @@ holder aggregates them.
    exported — the gate runs before the S3 precondition.  Either grant that caller `admin` at
    `/`, or move the bulk export to a server-administrator account.
 
+### 2.2.0 → 2.2.1
+
+**Nothing to re-grant.**  Unlike 2.1.x → 2.2.0, this release changes no permission, no role
+definition and no authorization behaviour, so every integration that works on 2.2.0 keeps
+working unchanged.  The only edit to `roles.xml` is a corrected `jcr:description` on
+`graphql-extension-websites-administrator`; those descriptions are not imported into the
+repository, so they are documentation for whoever reads that file and change nothing an operator
+can observe.
+
+One user-visible fix: **`createSiteByKey`'s `modulesToDeploy` argument now works.**  On 2.2.0 and
+every earlier release, supplying it failed with `IllegalArgumentException: argument type mismatch`
+for every caller — see the caveat under [Creation](#creation).  Callers that worked around this by
+omitting the argument need no change: omitting it still creates the site with just its template
+set.  They may now pass it instead.
+
 ## Installation
 
 - In Jahia, go to "Administration --> Server settings --> System components --> Modules"
@@ -217,6 +232,15 @@ to enable on the new site. It accepts **already-installed** module names only �
 cannot install a module, that requires the module manager. Omit the argument (or pass `null`) to
 create the site with just its template set. `serverNameAliasesAsString` is a single
 comma-separated string, not a list, and may also be omitted.
+
+> **`modulesToDeploy` requires 2.2.1 or later.**  On **2.2.0 and every earlier release** the
+> argument was declared as a Java array, which the GraphQL layer cannot populate from a list
+> argument, so supplying it — even as `[]` — fails with
+> `IllegalArgumentException: argument type mismatch` for **every** caller, including a full
+> server administrator.  On those versions **omit the argument entirely** (the rest of the
+> example above works unchanged); the site is created with just its template set and the modules
+> have to be enabled on it afterwards from Jahia's administration UI.  Omitting the argument
+> behaves identically on 2.2.1, so a call written without it works on every version.
 
 #### Deletion
 ```graphql
@@ -335,8 +359,10 @@ genuine domain failure.
 
 - **Pre-import zip-slip / archive validation**: the ZIP content is validated by Jahia core's
   `ImportExportBaseService`.  This module delegates entirely to that layer; no additional
-  ZIP-slip check is performed here.  The mutation is gated by `websitesAdmin`, so only
-  trusted administrators can trigger imports.
+  ZIP-slip check is performed here.  The exposure is bounded by the mutation's gate: past the
+  `websitesAdmin` annotation, the method body additionally requires **full server administrator**
+  (`admin` at `/`), so a delegated `websitesAdmin` holder gets `false` and only server
+  administrators can trigger imports.
 - **`exportAllSites` privilege scope**: resolved in 2.2.0 — the bulk export now requires full
   server-administrator rights, and the server role no longer grants repository-wide read.  See
   [Export confidentiality](#export-confidentiality).

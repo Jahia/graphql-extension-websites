@@ -15,6 +15,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.jahia.services.content.JCRTemplate;
 import org.mockito.MockedStatic;
 
 import javax.jcr.RepositoryException;
@@ -210,6 +211,41 @@ public class WebsitesAdminMutationExportDeletionGuardTest {
         assertThat(exportsDir.resolve("previous-export"))
                 .as("a stale export directory must be cleared, or Jahia rejects the server directory")
                 .doesNotExist();
+    }
+
+    /**
+     * {@code exportWebsite} must run the export under the <em>caller's own</em> session, never a
+     * system session — the §4.3 confidentiality property depends entirely on it.
+     *
+     * <p>Without this test that property has no lock. {@code exportAllSites} has one
+     * ({@code WebsitesAdminMutationExportAllSitesFailureTest} verifies {@code JCRTemplate} is
+     * never consulted); {@code exportWebsite} did not. Wrapping the {@code exportSites} call in
+     * {@code JCRTemplate.getInstance().doExecuteWithSystemSession(...)} is a plausible edit —
+     * {@link WebsitesAdminMutation#createSiteByKey} does exactly that, and it is what someone
+     * would reach for on an "empty archive" report from a site administrator — and it would leave
+     * every other test in this module green while turning a delegated site administrator's export
+     * into a full instance dump of users, roles and ACLs ({@code INCLUDE_USERS},
+     * {@code INCLUDE_ROLES} and {@code VIEW_ACL} are all set on the export params). That is the
+     * SEC-136 exfiltration class returning through a different door.
+     *
+     * <p>Driven through the same authorized happy path as the test above, so the assertion is made
+     * at the moment the exporter is actually reached.
+     */
+    @Test
+    public void exportWebsite_neverRunsTheExportUnderASystemSession() throws Exception {
+        // Arrange
+        directoryContainingAMarker("session-scope-export");
+        ServicesRegistry registry = registry(site());
+
+        try (MockedStatic<JCRTemplate> jcrTemplateStatic = mockStatic(JCRTemplate.class)) {
+            // Act — sentinel confirms we got as far as the exporter hand-off
+            assertThatThrownBy(() -> export("session-scope-export", sessionFactoryGranting(true), registry))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(SENTINEL);
+
+            // Assert
+            jcrTemplateStatic.verify(JCRTemplate::getInstance, never());
+        }
     }
 
     // -------------------------------------------------------------------------

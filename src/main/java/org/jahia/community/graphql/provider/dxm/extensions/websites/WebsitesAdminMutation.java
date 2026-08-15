@@ -55,10 +55,14 @@ import java.util.*;
  * GraphQL mutation extensions for Jahia website lifecycle operations (create, delete,
  * export, import, bulk export-to-S3).
  *
- * <p><b>Permissions.</b> Each mutation is gated by its own permission via
- * {@link GraphQLRequiresPermission}, so an operator can delegate one operation without
- * delegating the others.  Unauthenticated or insufficiently privileged requests are rejected
- * by the GraphQL security layer before the method body executes.
+ * <p><b>Permissions.</b> Every mutation is gated by {@link GraphQLRequiresPermission}, but the
+ * gates are <b>not all distinct</b>: only {@code createSiteByKey} ({@code websitesCreate}) and
+ * {@code exportAllSites} ({@code websitesExportAll}) carry a permission of their own.
+ * {@code deleteSiteByKey}, {@code exportWebsite} and {@code importWebsite} all share the coarse
+ * {@code websitesAdmin} gate, so granting it to delegate one of the three opens the annotation
+ * gate on the other two as well — those three are separated by their in-body checks, not by the
+ * annotation. See the table below.  Unauthenticated or insufficiently privileged requests are
+ * rejected by the GraphQL security layer before the method body executes.
  *
  * <table border="1">
  *   <caption>Permission per mutation</caption>
@@ -224,7 +228,7 @@ public class WebsitesAdminMutation {
     /**
      * Deletes the Jahia website identified by {@code siteKey}.
      *
-     * <p><b>Authorization (SEC-136).</b> The class-level {@code websitesAdmin} annotation is
+     * <p><b>Authorization (SEC-136).</b> The method-level {@code websitesAdmin} annotation is
      * evaluated at the repository root and therefore only answers "may this caller reach the
      * websites API at all" — it says nothing about <em>which</em> site may be destroyed. Until
      * 2.1.0 that was the only gate, so any holder of the delegated

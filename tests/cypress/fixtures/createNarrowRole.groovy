@@ -7,10 +7,17 @@ import javax.jcr.PathNotFoundException
  * Creates a server role carrying a caller-chosen subset of the module's permissions.
  *
  * The module ships one broad role (`graphql-extension-websites-administrator`), which cannot
- * demonstrate that the per-operation permission split has any effect — it carries every
- * permission, so it passes every gate either way. A narrow role built here is what makes the
- * split falsifiable: grant only `websitesCreate` and the holder must be able to create a site
- * and be REFUSED a bulk instance export.
+ * demonstrate that the per-operation permission split has any effect. It carries
+ * `graphqlAdminMutation websitesAdmin websitesCreate websitesExportAll`, so it clears the
+ * annotation gate on every mutation — the split between create and bulk export is invisible
+ * through it. A narrow role built here is what makes the split falsifiable: grant only
+ * `websitesCreate` and the holder must be able to create a site and be REFUSED a bulk instance
+ * export.
+ *
+ * (The server role does NOT pass every gate: `websitesDelete` and `websitesExport` live only on
+ * the site-scoped role, and exportAllSites/importWebsite each require full server administrator
+ * in the method body. It is broad at the ANNOTATION layer, which is the layer this fixture is
+ * about.)
  *
  * `graphqlAdminMutation` is always included because it is required to traverse
  * `admin { jahia { ... } }` at all; without it the caller is denied on the wrapper field and the
