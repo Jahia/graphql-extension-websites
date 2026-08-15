@@ -9,18 +9,31 @@ import {createUser, deleteUser, grantRoles} from '@jahia/cypress';
  *    enforced by the DXM provider as a `session.getNode("/").hasPermission(perm)` check
  *    (root-node ACL):
  *      • `createSiteByKey` → `websitesCreate`
- *      • `exportWebsite`   → `websitesExport`
- *      • `exportAllSites`  → `websitesExportAll`
+ *      • `exportAllSites`  → `websitesExportAll` (coarse; the real gate is the
+ *        server-administrator check inside the method)
+ *      • `exportWebsite`   → `websitesAdmin` (coarse; the real gate is the target-scoped
+ *        `websitesExport` check inside the method — see the §4.3 block below)
  *      • `deleteSiteByKey` → `websitesAdmin` (coarse; the real gate is the target-scoped
  *        `websitesDelete` check inside the method — see the SEC-136 block below)
  *      • `importWebsite`   → `websitesAdmin` (coarse; the real gate is the server-administrator
  *        check inside the method)
+ *
+ *    The two target-scoped mutations deliberately do NOT name their fine permission in the
+ *    annotation. It is evaluated at `/`, where `websitesExport` / `websitesDelete` are never
+ *    granted — they live on the site-scoped role — so naming them there would deny every site
+ *    administrator before the body ran.
  *  - RBAC content: the module ships the assignable `graphql-extension-websites-administrator`
  *    role (src/main/import/roles.xml). Because these mutations are nested under the DXM
- *    `admin { jahia { ... } }` wrapper, reaching a gated field also requires:
- *      • `jcr:read_default`     → satisfies the `admin` field's `@GraphQLRequiresPermission("jcr:read/jcr:system")`
- *      • `graphqlAdminMutation` → satisfies the `admin.jahia` field's `@GraphQLRequiresPermission("graphqlAdminMutation")`
- *    Omitting any one of them fails the gate on the corresponding field.
+ *    `admin { jahia { ... } }` wrapper, reaching a gated field also requires
+ *    `graphqlAdminMutation`, which satisfies the `admin.jahia` field's
+ *    `@GraphQLRequiresPermission("graphqlAdminMutation")`.
+ *
+ *    Note the `admin` field's own `@GraphQLRequiresPermission("jcr:read/jcr:system")` does NOT
+ *    require the role to grant `jcr:read_default`. Earlier revisions of this comment claimed it
+ *    did; that was verified false on a live instance in §4.3 — a user holding only
+ *    `graphqlAdminMutation` + `websitesCreate`, with no read permission at all, reaches
+ *    `createSiteByKey` successfully. Jahia satisfies that requirement for authenticated users by
+ *    other means, which is why the server role could drop the root-wide read grant outright.
  *
  * This module is API-only (no admin UI), so only the GraphQL authorization is asserted.
  *
