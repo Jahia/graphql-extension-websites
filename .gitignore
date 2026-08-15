@@ -9,3 +9,5 @@ target
 /pom.xml.tag
 /release.properties
 /pom.xml.next
+# CodeGraph semantic index (local tooling artifact)
+.codegraph
