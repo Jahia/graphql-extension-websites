@@ -1,6 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SEC-136: `websitesDelete` MUST stay a SIBLING of `websitesAdmin`, never a child of it.
+
+  Jahia registers nested permission nodes as aggregated sub-privileges of their parent
+  (JahiaPrivilegeRegistry.registerPrivileges -> new PrivilegeImpl(..., subPrivileges, ...)),
+  so holding a permission implicitly grants everything nested beneath it. Nesting
+  `websitesDelete` under `websitesAdmin` would hand it straight back to every holder of the
+  root-granted `graphql-extension-websites-administrator` role — i.e. it would look like a
+  permission split while changing nothing.
+
+  Both are children of `admin`, which is deliberate: a full server administrator holds `admin`
+  at the repository root and therefore aggregates both, so site deletion keeps working for
+  administrators without a special case in the code.
+-->
 <permissions xmlns:jcr="http://www.jcp.org/jcr/1.0">
     <admin jcr:primaryType="jnt:permission">
+        <!-- Coarse gate: may reach the websites GraphQL API at all. Checked at "/" by
+             @GraphQLRequiresPermission on every mutation in WebsitesAdminMutation. -->
         <websitesAdmin jcr:primaryType="jnt:permission"/>
+        <!-- Fine gate: may delete THIS site. Checked by WebsitesAdminMutation.deleteSiteByKey
+             against the target site node in the caller's own session. Deliberately absent from
+             the root-granted server role; carried by the site-scoped role in roles.xml. -->
+        <websitesDelete jcr:primaryType="jnt:permission"/>
     </admin>
 </permissions>

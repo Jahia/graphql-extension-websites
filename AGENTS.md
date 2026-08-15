@@ -75,7 +75,30 @@ The three mutations use three different privilege scopes. This is by design — 
 |---|---|---|
 | `exportWebsite`, `exportAllSites` | caller | An export degrades gracefully — fewer rights just means a smaller archive, so de-escalating costs nothing (SEC-136) |
 | `createSiteByKey` | **system session** | Load-bearing, **do not remove**. Writing `/sites/<siteKey>` needs rights on `/sites` that a delegated `websitesAdmin` holder lacks; a caller-scoped session would fail for exactly the non-admin users the permission exists to serve. The escalation *is* the delegation mechanism |
+| `deleteSiteByKey` | caller, **target-scoped** | Requires `websitesDelete` **on the site node itself**, checked in the caller's own session (SEC-136). Deletion cannot degrade gracefully, so neither de-escalation nor a global second gate fits |
 | `importWebsite` | system session **+ second gate** | Imports users and roles, which no de-escalation can bound, so it additionally requires full `admin` at the repository root (SEC-136) |
+
+**The `@GraphQLRequiresPermission` annotation cannot express a per-target rule.** The provider
+evaluates it as `session.getNode(path).hasPermission(perm)` with `path` defaulting to `/`
+(`GqlJcrPermissionChecker`); the path is static while the target arrives as a runtime argument.
+Any mutation acting on a *specific* site must therefore carry its own check in the method body.
+The absence of one on `deleteSiteByKey` was SEC-136 — a delegated role holder could delete any
+site on the instance.
+
+### Permission model (do not "simplify")
+
+Two permissions, both children of `admin`, and the shape is load-bearing:
+
+- `websitesDelete` is a **sibling** of `websitesAdmin`, never nested under it. Jahia registers
+  nested permission nodes as **aggregated sub-privileges** (`JahiaPrivilegeRegistry` →
+  `new PrivilegeImpl(..., subPrivileges, ...)`), so nesting would grant it to every holder of
+  `websitesAdmin` — a permission split that changes nothing.
+- `websitesDelete` is **absent from the root-granted server role**. JCR permissions inherit down
+  the tree, so granting it at `/` would satisfy the per-site check everywhere and make it vacuous.
+  It ships instead on the site-scoped `graphql-extension-websites-site-administrator` role.
+- Both sit under `admin`, so server administrators aggregate them and keep full reach with no
+  special case in the code. Do **not** add a `callerIsServerAdministrator()` fallback to
+  `deleteSiteByKey`; it would be redundant and would mask a misconfigured permission tree.
 
 `createSiteByKey`'s residual risk is bounded: the caller picks `templateSet` and `modulesToDeploy`, so they can enable any **already-installed** module on the new site — but cannot install modules (that needs the module manager) nor affect existing sites.
 

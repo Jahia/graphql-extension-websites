@@ -44,6 +44,8 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
     const exportWebsite: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/exportWebsite.graphql');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const importWebsite: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/importWebsite.graphql');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const siteExists: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/query/siteExists.graphql');
 
     const errorsOf = (result: {graphQLErrors?: Array<{message: string}>; errors?: Array<{message: string}>}) =>
         result.graphQLErrors ?? result.errors ?? [];
@@ -65,7 +67,7 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
     });
 
     after(() => {
-        cy.apolloClient(); // reset the current Apollo client back to root
+        cy.apolloClient(); // Reset the current Apollo client back to root
         cy.login();
         deleteUser(DENIED_USER);
         deleteUser(ALLOWED_USER);
@@ -120,6 +122,91 @@ describe('GraphQL Extension Websites — permission enforcement', () => {
             expect(errorsOf(result), 'annotation gate is passed — no Permission denied').to.have.length(0);
             expect((result as {data: {admin: {jahia: {websites: {importWebsite: boolean}}}}}).data.admin.jahia.websites.importWebsite)
                 .to.eq(false);
+        });
+    });
+
+    // SEC-136 — deleteSiteByKey is TARGET-scoped, not merely permission-gated.
+    //
+    // Until 2.1.0 the only gate on deleteSiteByKey was the root-evaluated `websitesAdmin`
+    // annotation, so any holder of the shipped role could destroy ANY site on the instance —
+    // including sites it never created and holds no rights on. The gap survived a first
+    // remediation pass precisely because no spec asserted it, so this block is the regression
+    // lock for the headline primitive.
+    //
+    // Two assertions are required and neither is sufficient alone:
+    //   • the mutation must not report success, AND
+    //   • the site must still be there when read back as root.
+    // A `false` return on its own cannot distinguish "denied" from "not found", because
+    // deleteSiteByKey already returns false for a site that does not exist. And the mutation's
+    // return value is not evidence of the persisted state — only the read-back is.
+    describe('site deletion is scoped to the caller authority', () => {
+        const VICTIM_SITE = 'gewVictimSite';
+        const VICTIM_PATH = `/sites/${VICTIM_SITE}`;
+
+        // Created as root, so the site is demonstrably not the delegated holder's own.
+        beforeEach(() => {
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({
+                mutation: createSiteByKey,
+                variables: {
+                    siteKey: VICTIM_SITE,
+                    serverName: `${VICTIM_SITE}.local`,
+                    title: 'Victim site',
+                    templateSet: 'templates-system',
+                    locale: 'en'
+                }
+            });
+        });
+
+        afterEach(() => {
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({mutation: deleteSiteByKey, variables: {siteKey: VICTIM_SITE}});
+        });
+
+        it('refuses deletion of a site the delegated role holder has no authority over', () => {
+            runAs(ALLOWED_USER, deleteSiteByKey, {siteKey: VICTIM_SITE}).then((result: never) => {
+                // The annotation gate is passed — the holder legitimately reaches the resolver.
+                // The refusal must come from the target-scoped check inside it.
+                expect(errorsOf(result), 'annotation gate is passed — no Permission denied')
+                    .to.have.length(0);
+                expect(
+                    (result as {data: {admin: {jahia: {websites: {deleteSiteByKey: boolean}}}}})
+                        .data.admin.jahia.websites.deleteSiteByKey,
+                    'a role-only holder must not delete a site it has no authority over'
+                ).to.eq(false);
+            });
+
+            // Read the repository back as root. This is the assertion that actually proves the
+            // site survived; the mutation's return value proves nothing about persisted state.
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({query: siteExists, variables: {path: VICTIM_PATH}, errorPolicy: 'all'})
+                .then((result: never) => {
+                    const node = (result as {data?: {jcr?: {nodeByPath?: {uuid: string} | null}}})
+                        .data?.jcr?.nodeByPath;
+                    expect(node, `${VICTIM_PATH} must still exist after the refused deletion`)
+                        .to.not.eq(null);
+                    expect(node, `${VICTIM_PATH} must still exist after the refused deletion`)
+                        .to.not.eq(undefined);
+                });
+        });
+
+        // The positive control. Without it, a change that breaks deleteSiteByKey for EVERYONE
+        // would leave the test above passing and read as "still secure".
+        it('still allows an administrator to delete the same site', () => {
+            cy.apolloClient();
+            cy.login();
+            cy.apollo({mutation: deleteSiteByKey, variables: {siteKey: VICTIM_SITE}})
+                .then((result: never) => {
+                    expect(errorsOf(result), 'root must not be denied').to.have.length(0);
+                    expect(
+                        (result as {data: {admin: {jahia: {websites: {deleteSiteByKey: boolean}}}}})
+                            .data.admin.jahia.websites.deleteSiteByKey,
+                        'an administrator must retain the ability to delete a site'
+                    ).to.eq(true);
+                });
         });
     });
 });

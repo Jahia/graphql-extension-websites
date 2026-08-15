@@ -1,0 +1,7 @@
+query SiteExists($path: String!) {
+    jcr(workspace: EDIT) {
+        nodeByPath(path: $path) {
+            uuid
+        }
+    }
+}
