@@ -150,15 +150,36 @@ public class WebsitesAdminMutationExportPreconditionTest {
         }
     }
 
+    /**
+     * Fail closed. A caller whose permission cannot be evaluated at all — the {@code catch
+     * (RepositoryException)} arm of {@code callerIsServerAdministrator()} — is refused, not
+     * admitted. {@code callerMayActOnSite} has had this pinned since
+     * {@code WebsitesAdminMutationDeleteSiteTest}; the same contract has to hold for the gate on
+     * the instance-wide export, where defaulting open would be worse.
+     */
     @Test
-    public void exportAllSitesResults_staysAnActionableOutcomeEnum() {
-        // The split is deliberate: unexpected failures are raised as DataFetchingException so their
-        // cause survives, rather than being flattened into a constant here. A new value should only
-        // appear for an outcome an operator can actually remedy — NOT_SERVER_ADMINISTRATOR
-        // qualifies (grant the admin role), AWS_S3_BUCKET_NOT_CONFIGURED qualifies (fix the config).
-        assertThat(WebsitesAdminMutation.ExportAllSitesResults.values())
-                .containsExactlyInAnyOrder(WebsitesAdminMutation.ExportAllSitesResults.SUCCESS,
-                        WebsitesAdminMutation.ExportAllSitesResults.AWS_S3_BUCKET_NOT_CONFIGURED,
-                        WebsitesAdminMutation.ExportAllSitesResults.NOT_SERVER_ADMINISTRATOR);
+    public void exportAllSites_failsClosed_whenTheAdministratorCheckErrors() throws Exception {
+        // Arrange
+        JCRSessionWrapper session = mock(JCRSessionWrapper.class);
+        when(session.getNode("/")).thenThrow(new RepositoryException("jcr down"));
+        JCRSessionFactory sessionFactory = mock(JCRSessionFactory.class);
+        when(sessionFactory.getCurrentUserSession()).thenReturn(session);
+
+        try (MockedStatic<BundleUtils> bundleUtils = mockStatic(BundleUtils.class);
+             MockedStatic<JCRSessionFactory> factoryStatic = mockStatic(JCRSessionFactory.class)) {
+            factoryStatic.when(JCRSessionFactory::getInstance).thenReturn(sessionFactory);
+
+            // Act
+            WebsitesAdminMutation.ExportAllSitesResults result = new WebsitesAdminMutation().exportAllSites();
+
+            // Assert
+            assertThat(result).isEqualTo(WebsitesAdminMutation.ExportAllSitesResults.NOT_SERVER_ADMINISTRATOR);
+            bundleUtils.verify(() -> BundleUtils.getOsgiService(SettingsBean.class, null), never());
+        }
     }
+
+    // The `ExportAllSitesResults` value set used to be asserted again here, identically to
+    // WebsitesAdminMutationExportAllSitesTest#exportAllSitesResults_declaresReachableValuesOnly().
+    // The duplicate has been folded into that one, which now also carries the reasoning about
+    // which outcomes belong in the enum at all.
 }

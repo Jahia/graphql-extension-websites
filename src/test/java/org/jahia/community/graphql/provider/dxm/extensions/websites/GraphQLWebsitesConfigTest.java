@@ -5,7 +5,6 @@ import org.junit.Test;
 import java.util.Hashtable;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Unit tests for {@link GraphQLWebsitesConfig}.
@@ -52,12 +51,10 @@ public class GraphQLWebsitesConfigTest {
         assertThat(cfg.getAwsS3SecretAccessKey()).isNull();
     }
 
-    @Test
-    public void updated_nullDictionary_doesNotThrow() {
-        GraphQLWebsitesConfig cfg = freshConfig();
-
-        assertThatCode(() -> cfg.updated(null)).doesNotThrowAnyException();
-    }
+    // `updated_nullDictionary_doesNotThrow` was removed here: updated_nullDictionary_remainsNotConfigured
+    // above already calls updated(null) on the same fresh instance, so any throw fails that test
+    // first. A separate no-throw assertion added no behavioural signal, only a second thing to
+    // maintain.
 
     // -------------------------------------------------------------------------
     // All keys present → configured

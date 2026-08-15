@@ -17,10 +17,28 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Unit tests for {@link PathSecurity}, the containment guard protecting the website
  * export/import mutations against path traversal from untrusted GraphQL input.
+ *
+ * <p><b>Which half of the guard a test exercises must not depend on the developer's filesystem.</b>
+ * {@code PathSecurity} is two layers: a lexical {@code normalize()} check, and a symlink-aware
+ * real-path check gated on {@code Files.exists(baseDir)}. The lexical group below therefore uses
+ * {@link #baseDir}, a path chosen so it cannot exist on any machine — this used to be
+ * {@code /var/jahia/exports}, which <em>does</em> exist on a developer box with a real Jahia
+ * install, so those tests silently exercised different code there than in CI. (The same
+ * {@code /var/jahia-unit-test} convention is already used deliberately by
+ * {@code WebsitesAdminMutationExportScopeTest}.)
+ *
+ * <p>The real-path layer is covered separately and explicitly, by the tests that build a base
+ * directory with {@link TemporaryFolder} — including
+ * {@link #resolveContained_parentTraversal_isRejected_whenTheBaseExistsOnDisk()}, which repeats a
+ * lexical case against an existing base so the two layers are known to agree.
  */
 public class PathSecurityTest {
 
-    private final Path baseDir = Paths.get("/var/jahia/exports").toAbsolutePath().normalize();
+    /**
+     * Deliberately a path no machine has: it keeps the tests below on the lexical layer only,
+     * whatever is installed locally. Do not point this at a real Jahia var directory.
+     */
+    private final Path baseDir = Paths.get("/var/jahia-unit-test/exports").toAbsolutePath().normalize();
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -87,15 +105,52 @@ public class PathSecurityTest {
 
     @Test
     public void isContained_siblingDirectory_isFalse() {
-        Path sibling = Paths.get("/var/jahia/imports").toAbsolutePath().normalize();
+        Path sibling = Paths.get("/var/jahia-unit-test/imports").toAbsolutePath().normalize();
         assertThat(PathSecurity.isContained(baseDir, sibling)).isFalse();
     }
 
     @Test
     public void isContained_prefixCollisionSibling_isFalse() {
-        // /var/jahia/exports-other must NOT be considered inside /var/jahia/exports
-        Path tricky = Paths.get("/var/jahia/exports-other/file").toAbsolutePath().normalize();
+        // A sibling whose name merely STARTS WITH the base name must not count as inside it —
+        // the classic startsWith(String) bug. Keep this path a real sibling of baseDir.
+        Path tricky = Paths.get("/var/jahia-unit-test/exports-other/file").toAbsolutePath().normalize();
         assertThat(PathSecurity.isContained(baseDir, tricky)).isFalse();
+    }
+
+    /**
+     * Guards the guard: if {@link #baseDir} ever starts existing, every lexical test above quietly
+     * changes meaning, because {@code resolveContained} would begin applying its real-path layer
+     * as well.
+     */
+    @Test
+    public void theLexicalBaseDirectoryDoesNotExistOnDisk() {
+        assertThat(baseDir)
+                .as("the lexical tests assume PathSecurity skips its symlink-aware layer; that "
+                        + "only holds while this base does not exist on the machine running them")
+                .doesNotExist();
+    }
+
+    /**
+     * The same traversal, rejected against a base that <em>does</em> exist — so the refusal is
+     * known to hold on both sides of the {@code Files.exists(baseDir)} branch rather than being
+     * decided by the filesystem.
+     */
+    @Test
+    public void resolveContained_parentTraversal_isRejected_whenTheBaseExistsOnDisk() throws IOException {
+        Path realBase = tmp.newFolder("exports").toPath().toRealPath();
+
+        assertThatThrownBy(() -> PathSecurity.resolveContained(realBase, "../../etc/passwd"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the allowed directory");
+    }
+
+    /** Likewise for an absolute escape, with the real-path layer active. */
+    @Test
+    public void resolveContained_absoluteEscape_isRejected_whenTheBaseExistsOnDisk() throws IOException {
+        Path realBase = tmp.newFolder("exports").toPath().toRealPath();
+
+        assertThatThrownBy(() -> PathSecurity.resolveContained(realBase, "/etc/shadow"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // -------------------------------------------------------------------------
