@@ -12,9 +12,17 @@ import javax.jcr.PathNotFoundException
  * split falsifiable: grant only `websitesCreate` and the holder must be able to create a site
  * and be REFUSED a bulk instance export.
  *
- * `jcr:read_default` and `graphqlAdminMutation` are always included because they are required
- * to traverse `admin { jahia { ... } }` at all; without them the caller is denied on the
- * wrapper fields and the test would pass for the wrong reason.
+ * `graphqlAdminMutation` is always included because it is required to traverse
+ * `admin { jahia { ... } }` at all; without it the caller is denied on the wrapper field and the
+ * test would pass for the wrong reason.
+ *
+ * `jcr:read_default` is deliberately NOT included. An earlier revision granted it here and
+ * claimed it was needed to reach the API — verified false on a live instance: a caller holding
+ * only `graphqlAdminMutation` + `websitesCreate`, with no read at all, invokes createSiteByKey
+ * successfully. It is also the exact grant §4.3 removed from the shipped server role
+ * (src/main/import/roles.xml), because this role is granted at `/` and JCR permissions inherit
+ * downward, so a root read grant hands the holder read over the whole repository — which would
+ * make this fixture broader than the role it is meant to narrow.
  *
  * Tokens: __ROLE_NAME__, __PERMISSIONS__ (space-separated permission names).
  */
@@ -39,7 +47,7 @@ JCRTemplate.getInstance().doExecuteWithSystemSession({ JCRSessionWrapper session
     role.setProperty('j:roleGroup', 'server-role')
     role.setProperty('j:privilegedAccess', true)
 
-    def all = (['jcr:read_default', 'graphqlAdminMutation'] + permissions).unique()
+    def all = (['graphqlAdminMutation'] + permissions).unique()
     role.setProperty('j:permissionNames', all as String[])
 
     session.save()
