@@ -197,20 +197,39 @@ public class PathSecurityTest {
     }
 
     /**
-     * A child of "." resolves to the base directory itself.
-     * Expected behaviour: ALLOWED — the caller receives the base dir path.
-     * Rationale: "." is a valid relative path meaning "current directory" (the base),
-     * and {@code base.resolve(".").normalize()} == {@code base}.  No traversal occurs.
+     * A child of "." resolves to the base directory itself, and {@code resolveContained} allows
+     * it: {@code base.resolve(".").normalize()} is {@code base}, so no traversal occurs and the
+     * containment question — <em>"did you escape the base?"</em> — is correctly answered "no".
+     *
+     * <p><b>ALLOWED here does not mean SAFE at the caller (SEC-363).</b> This test used to be
+     * annotated as though it certified the input as harmless. It does not, and cannot: this class
+     * pins a containment helper, and containment is {@code startsWith} — a subset relation, under
+     * which a directory is a subset of itself. Equality is the one overlap a containment check
+     * cannot exclude by construction, so a caller that does something <em>destructive</em> with
+     * the result must ask the second question, <em>"is this the base itself?"</em>, for itself.
+     *
+     * <p>In 2.2.0 none did: {@code exportWebsite} passed this very path to a recursive delete and
+     * one call destroyed every site's export archives while returning {@code true}. The refusal
+     * now lives in {@code WebsitesAdminMutation} — in {@code exportWebsite} and again in
+     * {@code deleteExportArtifact} — and is pinned by
+     * {@code WebsitesAdminMutationExportDeletionGuardTest} and
+     * {@code WebsitesAdminMutationDeleteExportArtifactTest}. <b>Do not</b> "fix" SEC-363 by making
+     * {@code resolveContained} reject "."; {@code importWebsite} legitimately resolves paths that
+     * may equal their base, and weakening the helper was explicitly ruled out — it was measured
+     * working throughout the live reproduction.
      */
     @Test
-    public void resolveContained_dotOnlyChild_resolvesToBase() throws IOException {
+    public void resolveContained_dotOnlyChild_resolvesToBase_whichCallersMustGuardAgainstThemselves() throws IOException {
         File baseFile = tmp.newFolder("exports");
         Path realBase = baseFile.toPath().toRealPath();
 
         Path resolved = PathSecurity.resolveContained(realBase, ".");
 
         assertThat(resolved).isEqualTo(realBase);
-        assertThat(PathSecurity.isContained(realBase, resolved)).isTrue();
+        assertThat(PathSecurity.isContained(realBase, resolved))
+                .as("containment is startsWith, so the base contains itself — this is exactly the "
+                        + "case a destructive caller must reject on its own (SEC-363)")
+                .isTrue();
     }
 
     /**

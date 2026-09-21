@@ -1,10 +1,20 @@
 - karafCommand: "log:log 'START - provisioning'"
 
-- karafCommand: "log:log 'START - Install graphql-extension-websites dependencies'"
-- installBundle:
-      - 'mvn:org.jahia.modules/graphql-dxm-provider/LATEST'
-  autoStart: true
-  uninstallPreviousVersion: false
-- karafCommand: "log:log 'END - Install graphql-extension-websites dependencies'"
-
+# NOTE: graphql-dxm-provider is deliberately NOT installed here.
+#
+# It used to be pulled as `mvn:org.jahia.modules/graphql-dxm-provider/LATEST` with
+# `uninstallPreviousVersion: false`. Every Jahia image already ships this module (8.2.3.2 ships
+# 3.7.0), so the only effect was to swap in a floating SNAPSHOT from devtools nexus at test time.
+# That had two costs, both measured on 2026-09-21:
+#
+#   1. Non-reproducible runs. LATEST resolved to 3.11.0-SNAPSHOT, a moving target, so the same
+#      commit tests against different provider code from one day to the next.
+#   2. It BROKE the suite. Swapping the provider after the platform's other modules have started
+#      drops their @GraphQLTypeExtension contributions from the schema: `dashboard` — which
+#      jahia-dashboard contributes, and which @jahia/cypress's getStartedModuleVersion() queries —
+#      became `FieldUndefined`, so expectModuleStarted() threw `modules.find is not a function` in
+#      the `before all` hook of all three specs and 30 of 33 tests were skipped.
+#
+# This module's own extension is unaffected: it is installed after the provider either way, so
+# `admin.jahia.websites` registers normally against the shipped provider.
 - karafCommand: "log:log 'END - provisioning'"

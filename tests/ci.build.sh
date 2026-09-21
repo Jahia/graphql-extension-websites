@@ -22,6 +22,11 @@ if [[ ${#jars[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# ./artifacts is gitignored, so it does not exist in a clean checkout. Without this the `cp`
+# below dies with "cannot create regular file './artifacts/': Not a directory" and, thanks to
+# `set -e`, the whole script stops before the test image is ever built.
+mkdir -p ./artifacts
+
 echo "Copying module artifact(s) into ./artifacts/:"
 for jar in "${jars[@]}"; do
     echo "  $(basename "${jar}")"

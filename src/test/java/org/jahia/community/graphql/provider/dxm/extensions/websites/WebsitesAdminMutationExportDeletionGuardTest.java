@@ -281,6 +281,103 @@ public class WebsitesAdminMutationExportDeletionGuardTest {
     }
 
     // -------------------------------------------------------------------------
+    // SEC-363 — the export path may not BE the exports base
+    // -------------------------------------------------------------------------
+
+    /**
+     * SEC-363, live-confirmed 2026-09-05 against the released 2.2.0 jar: {@code exportPath: "."}
+     * resolved to {@code <jahiaVarDiskPath>/exports} itself, passed containment (it never left the
+     * base), reached {@code deleteExportArtifact} — which is recursive — and destroyed every
+     * site's archives, including sites the caller was not acting on. The mutation returned
+     * {@code true}, so nothing in the response told the operator what had happened.
+     *
+     * <p><b>Why the traversal tests did not catch it.</b> {@link PathSecurity} asks <em>"did you
+     * escape the base?"</em> and is right to answer "no" here. Containment is
+     * {@code startsWith}, a subset relation, and a directory is a subset of itself — equality is
+     * the single case a containment check cannot exclude by construction. The repo's own
+     * {@code PathSecurityTest.resolveContained_dotOnlyChild_resolvesToBase} pins exactly this
+     * input as allowed, and correctly so for the helper in isolation; it is the destructive
+     * caller that must ask the second question.
+     *
+     * <p>Asserted on the filesystem, never on the return value — in the live measurement the
+     * benign and the destructive arm both returned {@code true}, so the return value is not a
+     * discriminator.
+     */
+    @Test
+    public void exportWebsite_refusesAnExportPathThatResolvesToTheExportsBase() throws Exception {
+        // Arrange — two decoys standing in for other sites' archives, as in the live reproduction
+        Path otherTenantArchive = exportsDir.resolve("tenantB.zip");
+        Files.write(otherTenantArchive, "another site's backup".getBytes("UTF-8"));
+        Path marker = directoryContainingAMarker("tenantC-export");
+        ServicesRegistry registry = registry(site());
+
+        // Act — the caller IS authorized on the site; only the base-equality refusal can stop this
+        Boolean result = export(".", sessionFactoryGranting(true), registry);
+
+        // Assert
+        assertThat(result).isFalse();
+        assertThat(otherTenantArchive)
+                .as("exportPath '.' recursively deleted every site's export artifacts (SEC-363)")
+                .exists();
+        assertThat(marker).exists();
+        assertThat(exportsDir).exists();
+        verify(registry, never()).getJahiaSitesService();
+        verify(registry, never()).getImportExportService();
+    }
+
+    /**
+     * The refusal must key off the <em>resolved</em> path, not off the literal string {@code "."}.
+     * Every fragment here normalizes to the exports base, so a check written as
+     * {@code "."​.equals(exportPath)} would let all but the first through and leave the
+     * vulnerability fully reachable.
+     */
+    @Test
+    public void exportWebsite_refusesEverySpellingThatNormalizesToTheExportsBase() throws Exception {
+        for (String equivalentOfDot : new String[]{".", "./", "./.", "previous-export/..", "a/b/../.."}) {
+            // Arrange
+            Path otherTenantArchive = exportsDir.resolve("tenantB.zip");
+            Files.write(otherTenantArchive, "another site's backup".getBytes("UTF-8"));
+            ServicesRegistry registry = registry(site());
+
+            // Act
+            Boolean result = export(equivalentOfDot, sessionFactoryGranting(true), registry);
+
+            // Assert
+            assertThat(result).as("exportPath '%s'", equivalentOfDot).isFalse();
+            assertThat(otherTenantArchive)
+                    .as("exportPath '%s' normalizes to the exports base and must be refused "
+                            + "on the resolved path, not on its spelling", equivalentOfDot)
+                    .exists();
+            verify(registry, never()).getImportExportService();
+
+            Files.delete(otherTenantArchive);
+        }
+    }
+
+    /**
+     * The other side of the refusal: an ordinary path <em>inside</em> the base is untouched by it.
+     * Without this, the two tests above would be satisfied by refusing every export, and the
+     * idempotent re-export behaviour would be silently lost.
+     *
+     * <p>{@link #exportWebsite_deletesAPreviousPlainExportAndProceeds()} already covers the happy
+     * path; this pins the specific near-miss — a name whose <em>prefix</em> is the base — so a
+     * guard written with {@code startsWith} instead of {@code equals} fails here.
+     */
+    @Test
+    public void exportWebsite_stillAllowsAnOrdinaryPathUnderTheExportsBase() throws Exception {
+        // Arrange
+        Path marker = directoryContainingAMarker("nested/deep-export");
+        ServicesRegistry registry = registry(site());
+
+        // Act + Assert — the sentinel proves the run reached the exporter
+        assertThatThrownBy(() -> export("nested/deep-export", sessionFactoryGranting(true), registry))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(SENTINEL);
+
+        assertThat(marker).doesNotExist();
+    }
+
+    // -------------------------------------------------------------------------
     // M4 / M5 — the two earlier refusals, and their ordering
     // -------------------------------------------------------------------------
 

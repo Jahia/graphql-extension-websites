@@ -171,6 +171,27 @@ for every caller — see the caveat under [Creation](#creation).  Callers that w
 omitting the argument need no change: omitting it still creates the site with just its template
 set.  They may now pass it instead.
 
+**Behaviour change — `exportWebsite` now refuses an `exportPath` that names the exports directory
+itself (SEC-363).**
+
+*Are you impacted?*  Only if a caller passes an `exportPath` that normalizes to
+`<jahia-var>/exports` — `"."`, `"./"`, `"x/.."` and equivalents.  Every path naming a
+subdirectory, which is what the documentation has always shown, is unaffected.
+
+*What changed.*  Before exporting, `exportWebsite` deletes whatever already sits at `exportPath`
+so that repeated exports to the same path are idempotent, and that deletion is recursive.  Up to
+and including 2.2.0 those values resolved to the exports base, passed path confinement — they
+never escaped it — and therefore **recursively deleted every site's export artifacts**, including
+sites the caller had not named, while the mutation returned `true`.  From 2.2.1 they are refused:
+the mutation returns `false` and deletes and exports nothing.  This needs the module's server role
+to reach at all, so it is a destructive footgun rather than a privilege escalation — but it is as
+easy to fire by accident as on purpose, `"."` being a value an operator might reasonably type
+meaning "here".
+
+*What to do.*  A caller that relied on exporting into `<jahia-var>/exports` directly must name a
+subdirectory instead, e.g. `exportPath: "my-site-export"`.  No configuration, permission or role
+change is required.
+
 ## Installation
 
 - In Jahia, go to "Administration --> Server settings --> System components --> Modules"
@@ -291,6 +312,15 @@ same way `importWebsite`'s `importPath` is relative to `jahiaImportsDiskPath`.  
 escapes that directory — `..` segments, an absolute path, a null byte, or a symlink resolving
 outside it — is rejected and the mutation returns `false` without exporting anything.
 
+It must also name something **inside** that directory rather than the directory itself.  Before
+exporting, the mutation deletes whatever already sits at `exportPath` so that repeated exports to
+the same path are idempotent (Jahia refuses a server export directory that is not empty), and that
+deletion is recursive.  `exportPath: "."` — and any other value that normalizes to the base, such
+as `"./"` or `"previous/.."` — therefore used to wipe **every site's** export artifacts while the
+mutation returned `true`.  Since 2.2.1 those values are refused and the mutation returns `false`
+without deleting or exporting anything (SEC-363).  Pick a path one level down, e.g.
+`exportPath: "my-site-export"`.
+
 #### Export All Sites To AWS S3
 
 Configure credentials via the `.cfg` file described in the **Configuration** section above,
@@ -345,7 +375,7 @@ reason.**  The Jahia server log carries the distinction.
 
 | Mutation | `false` means any of |
 |---|---|
-| `exportWebsite` | the `exportPath` was rejected (escapes `<jahia-var>/exports/`, is blank, or the resolved target is a symlink) · the site does not exist · the caller lacks `websitesExport` on that site · the export itself failed (JCR, I/O, XML) |
+| `exportWebsite` | the `exportPath` was rejected (escapes `<jahia-var>/exports/`, is blank, resolves to `<jahia-var>/exports/` itself, or the resolved target is a symlink) · the site does not exist · the caller lacks `websitesExport` on that site · the export itself failed (JCR, I/O, XML) |
 | `deleteSiteByKey` | the site does not exist · the caller lacks `websitesDelete` on that site · deletion failed (`JahiaException`) |
 | `importWebsite` | the caller is not a server administrator · `importPath` or `siteKey` was rejected as a traversal attempt · `export.properties` could not be read · the site import failed |
 | `createSiteByKey` | creation failed — e.g. the template set is not installed, or a site with that key already exists |
