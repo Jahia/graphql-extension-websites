@@ -78,11 +78,21 @@ public class WebsitesAdminMutationDeleteExportArtifactTest {
         }
     }
 
+    /**
+     * Invokes the helper with the artifact's own parent as {@code protectedBase}, i.e. the
+     * ordinary case where the artifact sits inside the exports directory. The base-equality
+     * refusal itself is exercised by
+     * {@link #deleteExportArtifact_refusesToDeleteTheProtectedBaseItself()}.
+     */
     private static void deleteExportArtifact(Path path) throws Exception {
+        deleteExportArtifact(path, path.getParent());
+    }
+
+    private static void deleteExportArtifact(Path path, Path protectedBase) throws Exception {
         Method method = WebsitesAdminMutation.class
-                .getDeclaredMethod("deleteExportArtifact", Path.class, String.class);
+                .getDeclaredMethod("deleteExportArtifact", Path.class, Path.class, String.class);
         method.setAccessible(true);
-        method.invoke(null, path, "unit-test");
+        method.invoke(null, path, protectedBase, "unit-test");
     }
 
     /** A path that was never written must be a no-op, not an error and not a fresh file. */
@@ -135,6 +145,60 @@ public class WebsitesAdminMutationDeleteExportArtifactTest {
      * unlinking the entry. Skipped when the JVM cannot make the directory read-only or is running
      * as root, where the permission bits do not apply.
      */
+    /**
+     * SEC-363. The helper's last-line guard: whatever the caller worked out, it must never
+     * recursively delete the directory it was told to protect.
+     *
+     * <p>This is deliberately redundant with the refusal in {@code exportWebsite}, and the
+     * redundancy is the point. The live incident was one contained-but-equal path
+     * ({@code exportPath: "."}) reaching {@code FileUtils.deleteQuietly}, which on a directory
+     * deletes recursively; every site's archives went with it and the mutation still returned
+     * {@code true}. A single check at one call site is one edit away from being gone.
+     *
+     * <p>Note the assertion is on the <em>contents</em>, not just the directory: an earlier
+     * shape of this bug emptied the base and left the now-empty directory in place, so
+     * asserting only {@code exists()} on the base would pass against the vulnerable code.
+     */
+    @Test
+    public void deleteExportArtifact_refusesToDeleteTheProtectedBaseItself() throws Exception {
+        // Arrange — an exports base standing in for a shared directory holding other tenants' archives
+        File exportsDir = tmp.newFolder("exports");
+        File otherTenantArchive = new File(exportsDir, "tenantB.zip");
+        Files.write(otherTenantArchive.toPath(), "another tenant's backup".getBytes("UTF-8"));
+
+        // Act — path and protectedBase are the same directory, as "." resolves them
+        assertThatCode(() -> deleteExportArtifact(exportsDir.toPath(), exportsDir.toPath()))
+                .as("a refusal is logged, never thrown — this also runs from a finally block")
+                .doesNotThrowAnyException();
+
+        // Assert
+        assertThat(otherTenantArchive)
+                .as("deleting the exports base is recursive: it destroys archives belonging to "
+                        + "sites the caller never named (SEC-363)")
+                .exists();
+        assertThat(exportsDir).exists();
+    }
+
+    /**
+     * The counterpart: an artifact that merely lives <em>under</em> the protected base is still
+     * deleted. Without this, the guard above could be satisfied by refusing everything, and the
+     * idempotent re-export that {@code deleteExportArtifact} exists to enable would break.
+     */
+    @Test
+    public void deleteExportArtifact_stillRemovesAnArtifactNestedUnderTheProtectedBase() throws Exception {
+        // Arrange
+        File exportsDir = tmp.newFolder("exports-nested");
+        File previousExport = new File(exportsDir, "previous-export");
+        Files.createDirectories(previousExport.toPath().resolve("nested"));
+
+        // Act
+        deleteExportArtifact(previousExport.toPath(), exportsDir.toPath());
+
+        // Assert
+        assertThat(previousExport).doesNotExist();
+        assertThat(exportsDir).exists();
+    }
+
     @Test
     public void deleteExportArtifact_survivesAFailedDeleteWithoutThrowingOrRemovingAnything() throws Exception {
         // Arrange

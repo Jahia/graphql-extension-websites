@@ -467,6 +467,19 @@ public class WebsitesAdminMutation {
             if (resolvedExportPath == null) {
                 return Boolean.FALSE;
             }
+            // SEC-363. Containment is a SUBSET check (startsWith), and a directory is a subset of
+            // itself: exportPath "." — and every other spelling that normalizes to nothing, "./",
+            // "x/.." — resolves to the exports base, passes resolveContained without ever leaving
+            // it, and then reaches the recursive cleanup below. That deleted every site's export
+            // artifacts while the mutation returned true. PathSecurity is not at fault and must not
+            // be changed: it correctly answers "did you escape?". This answers "did you select the
+            // base itself?", which is the only remaining overlap.
+            if (resolvedExportPath.equals(exportsBaseDir)) {
+                LOGGER.error("exportWebsite: refused export path '{}': it resolves to the exports base "
+                        + "directory '{}' itself, and exporting there would recursively delete every "
+                        + "site's export artifacts", exportPath, exportsBaseDir);
+                return Boolean.FALSE;
+            }
             final JahiaSite site = ServicesRegistry.getInstance().getJahiaSitesService().getSiteByKey(siteKey);
             if (site == null) {
                 LOGGER.error("exportWebsite: site '{}' not found", siteKey);
@@ -494,7 +507,7 @@ public class WebsitesAdminMutation {
             // (ImportExportBaseService.isValidServerDirectory requires it to be empty or
             // non-existent). Remove any previous export at this path so repeated exports
             // to the same exportPath are idempotent instead of failing with a 403.
-            deleteExportArtifact(resolvedExportPath, "exportWebsite");
+            deleteExportArtifact(resolvedExportPath, exportsBaseDir, "exportWebsite");
             final String cleanupXsl = settingsBean.getJahiaEtcDiskPath() + "/repository/export/cleanup.xsl";
             final Map<String, Object> params = buildSingleSiteExportParams(resolvedExportPath.toString(), cleanupXsl, onlyStaging);
 
@@ -880,7 +893,7 @@ public class WebsitesAdminMutation {
         } catch (Exception e) {
             throw new DataFetchingException(e);
         } finally {
-            deleteExportArtifact(exportFile, "exportAllSites");
+            deleteExportArtifact(exportFile, exportFile.getParent(), "exportAllSites");
         }
         return ExportAllSitesResults.SUCCESS;
     }
@@ -913,8 +926,31 @@ public class WebsitesAdminMutation {
      * failure must not fail the surrounding mutation, so this still swallows the error — it
      * just stops swallowing it <em>silently</em>. A file that was never created is not a
      * failure and is not logged.
+     *
+     * <p><b>SEC-363 — {@code protectedBase} is a hard floor, not a formality.</b>
+     * {@code FileUtils.deleteQuietly} on a directory deletes recursively, so handing this the
+     * exports base itself wipes every site's artifacts. Callers derive {@code path} from
+     * untrusted GraphQL input, and path containment alone does not exclude the base (a
+     * directory {@code startsWith} itself). This refuses that one case unconditionally, so the
+     * invariant holds even if a caller-side check is dropped or a new caller forgets one. It is
+     * a second, independent gate — not a replacement for the refusal in
+     * {@link #exportWebsite(String, String, boolean)}, which rejects the input before the site
+     * is even resolved. Refusing here is logged and non-fatal: this runs from a
+     * {@code finally} block, where throwing would mask the original failure.
+     *
+     * @param path          the artifact to remove; may or may not exist
+     * @param protectedBase the directory the artifact must live <em>under</em> and may never
+     *                      <em>be</em> — normally {@code <jahiaVarDiskPath>/exports}
+     * @param operation     mutation name, for logging only
      */
-    private static void deleteExportArtifact(Path path, String operation) {
+    private static void deleteExportArtifact(Path path, Path protectedBase, String operation) {
+        final Path normalized = path.toAbsolutePath().normalize();
+        if (normalized.equals(protectedBase.toAbsolutePath().normalize())) {
+            LOGGER.error("{}: refused to delete '{}': it is the exports base directory itself, and "
+                    + "deleting it would recursively remove every site's export artifacts",
+                    operation, normalized);
+            return;
+        }
         final File file = path.toFile();
         if (!file.exists()) {
             return;

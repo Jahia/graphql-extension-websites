@@ -23,6 +23,13 @@ describe('GraphQL Extension Websites', () => {
     // this one lands somewhere the test can prove stayed empty.
     const ESCAPING_EXPORT_PATH = '../cypress-escaped-export';
     const ESCAPED_VAR_PATH = 'cypress-escaped-export';
+    // SEC-363. A real export standing in for another site's archive, planted inside the exports
+    // base so that a delete OF the base takes it with it. A decoy is required: a spec that only
+    // reads the return value cannot see this bug, because the destructive call returned `true`.
+    const SEC363_DECOY_EXPORT_DIR = 'cypress-sec363-decoy';
+    // Every spelling that normalizes to the exports base itself. All of them pass containment —
+    // they never escape — so each must be refused by the base-equality check instead.
+    const EXPORT_PATHS_RESOLVING_TO_THE_BASE = ['.', './', 'cypress-sec363-decoy/..'];
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const createSiteByKey: DocumentNode = require('graphql-tag/loader!../fixtures/graphql/mutation/createSiteByKey.graphql');
@@ -59,6 +66,7 @@ describe('GraphQL Extension Websites', () => {
     after(() => {
         cleanupStagedDirs({exportDir: EXPORT_DIR});
         cleanupStagedDirs({exportDir: IDEMPOTENT_EXPORT_DIR});
+        cleanupStagedDirs({exportDir: SEC363_DECOY_EXPORT_DIR});
     });
 
     it('creates a site via GraphQL and returns true', () => {
@@ -244,6 +252,45 @@ describe('GraphQL Extension Websites', () => {
             .its('data.admin.jahia.websites.exportWebsite')
             .should('eq', true);
         expectExportArtifactPresent(IDEMPOTENT_EXPORT_DIR, SYSTEM_SITE_KEY);
+    });
+
+    // SEC-363. exportWebsite clears whatever sits at exportPath before exporting, and that clear
+    // is recursive. `exportPath: "."` resolves to {jahiaVarDiskPath}/exports itself — it passes
+    // PathSecurity containment, because it never left the base — so up to 2.2.0 a single call
+    // destroyed EVERY site's export archives and still returned true.
+    //
+    // This is the live reproduction's three-arm shape, minus the arm that cannot run here: a decoy
+    // export is planted, one variable (the path) is changed, and the surviving decoy is the
+    // verdict. The boolean is asserted too, but it is NOT the discriminator — in the measured
+    // incident the benign and the destructive call both returned true.
+    it('refuses an exportWebsite path that resolves to the exports directory itself', () => {
+        // Arrange — a REAL export belonging to nobody in particular, sitting in the blast radius.
+        cleanupStagedDirs({exportDir: SEC363_DECOY_EXPORT_DIR});
+        cy.apollo({
+            mutation: exportWebsite,
+            variables: {siteKey: SYSTEM_SITE_KEY, exportPath: SEC363_DECOY_EXPORT_DIR, onlyStaging: false}
+        })
+            .its('data.admin.jahia.websites.exportWebsite')
+            .should('eq', true);
+        // Serialised on the on-disk result: exportWebsite is @GraphQLAsync, so without this the
+        // decoy might not exist yet when the destructive call runs and its survival would prove
+        // nothing.
+        expectExportArtifactPresent(SEC363_DECOY_EXPORT_DIR, SYSTEM_SITE_KEY);
+
+        EXPORT_PATHS_RESOLVING_TO_THE_BASE.forEach(exportPath => {
+            // Act
+            cy.apollo({
+                mutation: exportWebsite,
+                variables: {siteKey: SYSTEM_SITE_KEY, exportPath, onlyStaging: false}
+            })
+                .its('data.admin.jahia.websites.exportWebsite')
+                .should('eq', false);
+
+            // Assert — the decoy is still a complete export. The refusal must key off the
+            // RESOLVED path, so a guard written against the literal string '.' fails here on the
+            // second and third value.
+            expectExportArtifactPresent(SEC363_DECOY_EXPORT_DIR, SYSTEM_SITE_KEY);
+        });
     });
 
     // Schema-shape guard. The real path is admin.jahia.websites.exportAllSites; the flat
