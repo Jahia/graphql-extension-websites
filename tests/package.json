@@ -43,7 +43,7 @@
     "mochawesome": "^7.1.4",
     "mochawesome-merge": "^4.2.0",
     "mochawesome-report-generator": "^6.3.2",
-    "prettier": "^2.0.0",
+    "prettier": "^3.9.6",
     "source-map-support": "^0.5.20",
     "supports-color": "^10.2.2",
     "typescript": "^4.4.4",
