@@ -29,8 +29,8 @@
     "eslint-plugin-chai-friendly": "^1.2.1",
     "eslint-plugin-cypress": "^2.15.1",
     "eslint-plugin-import": "^2.25.2",
-    "eslint-plugin-jest": "^27.2.1",
-    "eslint-plugin-n": "^15.0.0",
+    "eslint-plugin-jest": "^29.16.1",
+    "eslint-plugin-n": "^18.3.0",
     "eslint-plugin-prettier": "^4.0.0",
     "eslint-plugin-promise": "^7.3.0",
     "eslint-plugin-react": "^7.32.2",
@@ -43,11 +43,11 @@
     "mochawesome": "^7.1.4",
     "mochawesome-merge": "^4.2.0",
     "mochawesome-report-generator": "^6.3.2",
-    "prettier": "^2.0.0",
+    "prettier": "^3.9.6",
     "source-map-support": "^0.5.20",
     "supports-color": "^10.2.2",
     "typescript": "^4.4.4",
-    "webpack": "5.107.2"
+    "webpack": "5.109.2"
   },
   "scripts": {
     "e2e:ci": "cypress run",
@@ -71,10 +71,11 @@
   "resolutions": {
     "@babel/core": "^7.29.6",
     "@babel/plugin-transform-modules-systemjs": "^7.29.4",
-    "axios": "^1.16.0",
-    "fast-uri": "^3.1.5",
+    "axios": "^1.20.0",
+    "fast-uri": "^3.1.9",
+    "follow-redirects": "^1.16.1",
     "serialize-javascript": "^7.0.5",
-    "systeminformation": "^5.31.6",
+    "systeminformation": "^5.33.19",
     "uuid": "^11.1.1"
   }
 }
