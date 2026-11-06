@@ -7,7 +7,46 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      maven-dependencies:
+        patterns:
+          - "*"
+    ignore:
+      # Jahia platform version (parent and org.jahia.* deps) is pinned deliberately.
+      - dependency-name: "org.jahia.*"
+      # OSGi spec artifacts change Require-Capability / Import-Package ranges.
+      - dependency-name: "org.osgi:*"
+      # GraphQL libraries are provided by the Jahia platform (graphql-dxm-provider).
+      - dependency-name: "com.graphql-java:*"
+      - dependency-name: "com.graphql-java-kickstart:*"
+      - dependency-name: "io.github.graphql-java:*"
+      # slf4j-api is provided by the platform: stay on the 2.0.x line.
+      - dependency-name: "org.slf4j:*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: "npm"
     directory: "/tests"
     schedule:
       interval: "weekly"
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "cypress"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@jahia/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@apollo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql-tag"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mocha"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@babel/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
