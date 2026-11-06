@@ -69,6 +69,8 @@
   },
   "homepage": "https://github.com/Jahia/graphql-extension-websites#readme",
   "resolutions": {
+    "**/nyc/glob": "^14.0.3",
+    "**/test-exclude/glob": "^14.0.3",
     "**/@typescript-eslint/typescript-estree/minimatch": "^11.0.1",
     "**/istanbul-lib-processinfo/rimraf/glob/minimatch": "^11.0.1",
     "**/nyc/glob/minimatch": "^11.0.1",
