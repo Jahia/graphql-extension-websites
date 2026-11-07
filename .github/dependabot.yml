@@ -32,6 +32,11 @@ updates:
         patterns:
           - "*"
     ignore:
+      # cross-fetch >= 3.2.0 hands back an unbound window.fetch; under @jahia/cypress 7 the e2e
+      # GraphQL calls then fail with "TypeError: Illegal invocation" (2026-11 e2e runs). Stay on
+      # 3.1.x until this harness moves to @jahia/cypress 8, where cross-fetch 4 works.
+      - dependency-name: "cross-fetch"
+        versions: [">=3.2.0"]
       - dependency-name: "cypress"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@jahia/*"
